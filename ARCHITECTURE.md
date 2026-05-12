@@ -70,11 +70,42 @@ Three zones on the VPS, three trust levels.
 | Tailscale daemon | host | Ingress (Tailscale-only, deny-all ACL) + outbound mesh |
 | Docker engine | host | Container runtime, configured for rootless |
 | cred-daemon | creds | Fetches credentials from Infisical (daily + on sandbox start), runs socket server, publishes alerts |
-| ssh-agent | creds | Signs git/ssh challenges originating in sandbox |
-| Git credential helper | creds | Vends GitHub HTTPS tokens to sandbox on socket request |
-| gcloud / hcloud / wrangler token helpers | creds | Vend cloud tokens on socket request |
+| ssh-agent | creds | Signs git/ssh challenges originating in sandbox (true signing oracle — private key never leaves creds zone) |
+| Per-CLI credential shims | creds | Bespoke per upstream CLI; see "Per-CLI integration" below |
 | Sandbox container | sandbox | Runs the agent + project work |
 | ntfy publisher | creds | Pushes alerts to phone (free tier of ntfy.sh) |
+
+## Firewall & IPv6
+
+Ingress is blocked at three deny-by-default layers, configured during cloud-init in this order:
+
+1. **Hetzner Cloud firewall** attached to the VPS — denies all public-internet inbound IPv4.
+2. **`ufw` on the VPS** — same deny-all-inbound rule on the box itself; defense in depth (Hetzner firewall + host firewall together).
+3. **Tailscale ACL** — deny-by-default, then explicit allow rules for tags applied to my own tailnet nodes.
+
+**IPv6 is disabled** entirely on the VPS:
+- Cloud-init: `hcloud server create --without-ipv6`
+- Kernel sysctl: `net.ipv6.conf.all.disable_ipv6 = 1`, `net.ipv6.conf.default.disable_ipv6 = 1`
+- No ip6tables / ufw v6 rules to maintain
+- All outbound dependencies (GitHub, GCP, Cloudflare, Hetzner, npm, pypi, Anthropic, OpenAI, Infisical, Tailscale) support IPv4
+
+Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity).
+
+## Per-CLI integration
+
+There is no single "credential socket protocol." Each non-SSH CLI consumes credentials from a different place. The cred-daemon writes the appropriate config file or env-export from Infisical-fetched values:
+
+| CLI | Where it reads creds | What cred-daemon writes |
+|---|---|---|
+| `git` (SSH) | `SSH_AUTH_SOCK` | ssh-agent socket — signing oracle, no raw key in sandbox |
+| `git` (HTTPS) | git credential-helper protocol | socket-backed helper that returns the GitHub token |
+| `gh` | `~/.config/gh/hosts.yml` | the GitHub token (config file) |
+| `gcloud` | `~/.config/gcloud/application_default_credentials.json` | the SA key JSON (file) |
+| `wrangler` | `CLOUDFLARE_API_TOKEN` env var | env-export script the agent sources at startup |
+| `hcloud` | `HCLOUD_TOKEN` env var | env-export script |
+| `npm` (publish) | `~/.npmrc` `_authToken` | per-registry auth line (config file) |
+
+All of these except SSH put the raw bearer token somewhere the sandbox process can read at use-time. SSH via ssh-agent is the only true signing oracle (private key never enters the sandbox). Tightening this for `git` operations is open decision #1 (HTTPS → SSH for git).
 
 ## Daily refresh flow
 
@@ -93,19 +124,17 @@ The cred-daemon does **not** mint, rotate, or otherwise call any upstream servic
 
 Triggered when the VPS is destroyed/compromised/lost:
 
-1. **Provision**: `hcloud server create` (or single shell script) creates a new CX22 with cloud-init from this repo
-2. **Cloud-init installs**: Ubuntu LTS base, Tailscale, rootless Docker, cred-daemon source from this repo
-3. **Paste #1 — Tailscale auth-key**: generated fresh from Tailscale admin UI (single-use, ≤24h TTL), pasted into the bootstrap script → `tailscale up`
-4. **SSH in** from laptop via Tailscale
-5. **Paste #2 — Infisical Universal Auth client secret**: written to `/etc/agent-vps/infisical-uauth` (0600 creds:creds)
-6. **cred-daemon starts**, runs first refresh, populates `/var/lib/agent-vps/creds/`
-7. **Sandbox container starts** (Docker pulls or builds image)
-8. **`docker exec -it sandbox tmux new`** — get a shell inside the sandbox
-9. **`claude login`** — interactive OAuth, browser flow on laptop, refresh token persists in `~/.claude/` inside sandbox
-10. **`codex login`** — same
-11. **tmux detach**, agent is ready
+1. **Generate fresh Tailscale auth-key** from Tailscale admin UI (single-use, ≤24h TTL).
+2. **Provision**: `hcloud server create --without-ipv6 ...` with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker, cred-daemon source, applies the Hetzner Cloud firewall, configures ufw + IPv6-disable sysctls, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
+3. **SSH in** from laptop via Tailscale.
+4. **Paste — Infisical Universal Auth client secret** into `/etc/agent-vps/infisical-uauth` (0600 creds:creds).
+5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`.
+6. **Sandbox container starts**. The named volume `agent-state` is created (if first-ever rebuild) or attached (if reusing previous state).
+7. **`docker exec -it sandbox tmux new`** — get a shell inside the sandbox.
+8. **`claude login`** + **`codex login`** — only required on first-ever bootstrap or if the named volume was wiped. On subsequent rebuilds, refresh tokens persist in the named volume and the agents are already authenticated.
+9. **tmux detach**, agent is ready.
 
-**Total manual touchpoints**: 2 pastes + 2 interactive OAuth logins ≈ 3 minutes if things work.
+**Manual touchpoints**: 1 paste (Infisical secret) + (first time only) 2 interactive OAuth logins. Roughly 2 minutes if the named volume survives; 3–4 minutes if first-ever bootstrap.
 
 ## File layout on VPS
 
@@ -122,20 +151,25 @@ Triggered when the VPS is destroyed/compromised/lost:
     hetzner-token          0600  creds:creds
     ssh-key                0600  creds:creds
     npm-token              0600  creds:creds
-  sockets/                                     # mounted into sandbox
-    ssh-agent.sock         0660  creds:creds
-    git-helper.sock        0660  creds:creds
+  sockets/                                     # mounted into sandbox; group-shared for rootless Docker subgid mapping
+    ssh-agent.sock         0660  creds:agent-sockets
+    git-helper.sock        0660  creds:agent-sockets
+  sandbox-state/                               # named Docker volume — persists across container/image refresh
+    home-claude/                               # /home/agent/.claude (OAuth refresh tokens)
+    home-codex/                                # /home/agent/.codex (OAuth refresh tokens)
+    tmux/                                      # tmux socket + state
 
 /srv/dev/projects/                merijn:merijn   # mounted rw into sandbox at /work
 
 /opt/agent-vps/                   root:root      # cred-daemon source (read-only at runtime)
-  daemon/                                       # systemd service unit + main loop
-  refresh/                                      # per-credential re-mint scripts
+  daemon/                                       # systemd service unit + main loop (fetch from Infisical, serve sockets)
+  integrations/                                 # per-CLI integration shims (write ADC file / env exports / config files)
   alerts/                                       # ntfy publisher
 ```
 
 **Sandbox mounts (rootless Docker):**
-- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (rw on the sockets only)
+- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (the sandbox container's user is mapped via subgid to GID `agent-sockets` so it can `connect()` to the sockets, but cannot `unlink()` files in the dir)
+- `/var/lib/agent-vps/sandbox-state/` → `/home/agent/` and `/tmp/tmux-*` (named volume, rw, survives image refresh — preserves OAuth tokens and tmux session state)
 - `/srv/dev/projects/` → `/work` (rw)
 
 **Sandbox does NOT mount:** anything under `/etc/agent-vps/`, `/var/lib/agent-vps/creds/`, or `/opt/agent-vps/`.

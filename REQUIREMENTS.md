@@ -87,6 +87,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 - **MUST** — VPS firewall blocks all incoming ports from the public internet. Only Tailscale traffic is permitted in. SSH, any agent endpoints, anything else are reachable only via tailnet.
 - **MUST** — Tailscale ACL is deny-by-default: only my own tailnet nodes can reach the VPS.
+- **MUST** — IPv6 is disabled on the VPS. All services we depend on support IPv4; disabling IPv6 eliminates a parallel attack surface and simplifies firewall configuration.
 
 **Egress (outgoing):**
 
