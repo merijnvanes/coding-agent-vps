@@ -6,15 +6,17 @@ Documentation=https://github.com/merijnvanes/coding-agent-vps
 Type=forking
 User=creds
 Group=creds
-# Run ssh-agent and have it create the socket where the sandbox expects.
-# -a sets the socket path; ssh-agent will create the file with mode 0600
-# owned by creds:creds — we fix the mode + group in ExecStartPost so the
-# sandbox container (subgid mapped into agent-sockets group) can connect.
-ExecStartPre=/usr/bin/install -d -m 0750 -o creds -g creds /var/lib/agent-vps/sockets
+# Sockets dir is 0755 so the rootless-Docker-mapped sandbox UID can traverse
+# it. Actual access to the socket file is gated by the socket's own mode
+# (0660) + the agent-sockets group, which the sandbox container is added to
+# via subgid mapping configured at cloud-init time.
+ExecStartPre=/usr/bin/install -d -m 0755 -o creds -g creds /var/lib/agent-vps/sockets
+# -a sets the socket path; ssh-agent creates the file as 0600 owned by creds:creds.
 ExecStart=/usr/bin/ssh-agent -a /var/lib/agent-vps/sockets/ssh-agent.sock
+# Hand the socket over to the agent-sockets group with 0660 so the sandbox
+# (via subgid-mapped membership) can connect() but cannot unlink().
 ExecStartPost=/bin/chgrp agent-sockets /var/lib/agent-vps/sockets/ssh-agent.sock
 ExecStartPost=/bin/chmod 0660 /var/lib/agent-vps/sockets/ssh-agent.sock
-# ssh-agent doesn't have a graceful stop; let systemd terminate it
 KillMode=mixed
 # Hardening
 NoNewPrivileges=true

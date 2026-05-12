@@ -5,61 +5,65 @@
 #   1. Authenticate to Infisical with Universal Auth (clientId + clientSecret
 #      from /etc/agent-vps/infisical-uauth — the bootstrap secret).
 #   2. Fetch all secret values from the configured Infisical project + env.
-#   3. Write each secret to its designated location:
-#      - github-ssh-key       → /var/lib/agent-vps/creds/github-ssh-key
-#                               (also: ssh-add to the running ssh-agent)
-#      - gcp-sa-key (JSON)    → /var/lib/agent-vps/agent-config/gcloud/
-#                               application_default_credentials.json
-#      - cloudflare-token     → /var/lib/agent-vps/agent-config/env/cloudflare.sh
-#      - hcloud-token         → /var/lib/agent-vps/agent-config/env/hetzner.sh
-#      - npm-token            → /var/lib/agent-vps/agent-config/npm/npmrc
-#      - ntfy-topic           → /var/lib/agent-vps/creds/ntfy-topic
-#   4. Missing secrets are skipped silently — adding a secret to Infisical
-#      later, then restarting the daemon, is sufficient to enable that CLI.
+#   3. Write each secret to its designated location (see "Secret routing"
+#      block below). Files end up owned by the daemon's user (creds) since
+#      that's who's writing them — no chown needed.
+#   4. Missing secrets are skipped silently. Adding a secret to Infisical
+#      later, then restarting cred-daemon.service, enables that integration.
 #
 # What this does NOT do:
 #   - Mint, rotate, or call any upstream service's API. Upstream credential
 #     lifecycle is the user's responsibility (REQUIREMENTS.md §5).
 #
-# Runs as user `creds` via the cred-daemon.service systemd unit, both at
-# boot and daily at 04:00 UTC via cred-daemon.timer.
+# Runs as user `creds` via cred-daemon.service. Triggered:
+#   - On boot (multi-user.target)
+#   - Daily at 04:00 UTC (cred-daemon.timer)
+#   - Manually via `systemctl start cred-daemon`
 
 set -euo pipefail
 
 # === Config ===
-BOOTSTRAP_FILE="/etc/agent-vps/infisical-uauth"        # source-able file with CLIENT_ID + CLIENT_SECRET
-CONFIG_FILE="/etc/agent-vps/config.env"                # source-able: INFISICAL_PROJECT_ID, INFISICAL_ENV, INFISICAL_URL
-CREDS_DIR="/var/lib/agent-vps/creds"
-CONFIG_DIR="/var/lib/agent-vps/agent-config"
+BOOTSTRAP_FILE="/etc/agent-vps/infisical-uauth"   # source-able: INFISICAL_CLIENT_ID, INFISICAL_CLIENT_SECRET
+CONFIG_FILE="/etc/agent-vps/config.env"           # source-able: INFISICAL_PROJECT_ID, INFISICAL_ENV, INFISICAL_URL
+CREDS_DIR="/var/lib/agent-vps/creds"              # raw key material, 0700 — sandbox cannot read
+CONFIG_DIR="/var/lib/agent-vps/agent-config"      # per-CLI files, 0755 — sandbox bind-mounts these read-only
 SSH_AGENT_SOCKET="/var/lib/agent-vps/sockets/ssh-agent.sock"
 ALERTS_SCRIPT="/opt/agent-vps/alerts/ntfy.sh"
 
 # Defaults if not overridden by config.env
-INFISICAL_URL="${INFISICAL_URL:-https://app.infisical.com}"
+INFISICAL_URL="${INFISICAL_URL:-https://us.infisical.com}"
 INFISICAL_ENV="${INFISICAL_ENV:-prod}"
 
 # === Helpers ===
 log()   { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
-alert() { "$ALERTS_SCRIPT" "$1" "$2" || log "WARN: alert script failed"; }
+alert() { "$ALERTS_SCRIPT" "$1" "$2" 2>/dev/null || log "WARN: alert script failed"; }
 die()   { log "FATAL: $*"; alert "cred-daemon" "FATAL: $*"; exit 1; }
 
-# Write a file atomically with explicit mode and owner. Refuses to write
-# empty content (treats that as "secret missing in Infisical, skip").
+# Atomic write: temp file in same dir → fsync via mv. Mode 0644 by default,
+# pass an explicit mode as $2. Empty content is treated as "no value, skip
+# update" and the function returns 1 — callers use this to know whether to
+# fire follow-up actions (e.g. ssh-add reload after writing a new SSH key).
 atomic_write() {
-  local dest="$1" mode="$2" content="$3"
+  local dest="$1" mode="${2:-0644}" content="$3"
   [[ -z "$content" ]] && return 1
-  install -d -m 0750 -o creds -g creds "$(dirname "$dest")"
-  local tmp
+  local dir tmp
+  dir=$(dirname "$dest")
+  install -d -m 0755 "$dir"   # daemon's umask + UID make ownership correct
   tmp=$(mktemp "${dest}.XXXXXX")
   printf '%s' "$content" > "$tmp"
   chmod "$mode" "$tmp"
-  chown creds:creds "$tmp"
-  mv "$tmp" "$dest"
+  mv -f "$tmp" "$dest"
 }
 
-# Fetch one secret value by key from the in-memory $SECRETS_JSON.
+# Get one secret value by key from the in-memory $SECRETS_JSON.
+# Returns the value on stdout, exit code 0 even if the key is missing
+# (empty stdout in that case — callers check for that).
+# Uses --arg for the KEY (not sensitive); secret VALUE never leaves
+# jq's stdin/stdout, so no /proc exposure.
 secret_value() {
-  jq -r --arg key "$1" '.secrets[] | select(.secretKey == $key) | .secretValue // empty' <<<"$SECRETS_JSON"
+  jq -r --arg key "$1" \
+    '.secrets[]? | select(.secretKey == $key) | .secretValue // empty' \
+    <<<"$SECRETS_JSON"
 }
 
 # === Load config + bootstrap ===
@@ -74,82 +78,137 @@ source "$BOOTSTRAP_FILE"
 [[ -n "${INFISICAL_CLIENT_ID:-}" && -n "${INFISICAL_CLIENT_SECRET:-}" ]] \
   || die "INFISICAL_CLIENT_ID or INFISICAL_CLIENT_SECRET not set"
 
+# === Ensure target directories exist with the right mode ===
+# Creds zone: 0700 — only daemon can read. Sandbox cannot reach.
+install -d -m 0700 "$CREDS_DIR"
+# Config zone: 0755 — sandbox bind-mounts these read-only; "other" needs
+# +x on the directory to traverse and +r on the files to read.
+install -d -m 0755 "$CONFIG_DIR"
+install -d -m 0755 "$CONFIG_DIR/env"
+install -d -m 0755 "$CONFIG_DIR/gcloud"
+install -d -m 0755 "$CONFIG_DIR/npm"
+
 # === 1. Authenticate to Infisical ===
+# Body and Authorization header are passed via temp files (mode 0600) so the
+# client secret and access token are NOT visible in /proc/<pid>/cmdline of
+# curl/jq. The temp files live in the daemon's PrivateTmp namespace (set in
+# the systemd unit) and are cleaned up on exit.
+TMPDIR_CLEAN=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_CLEAN"' EXIT
+chmod 0700 "$TMPDIR_CLEAN"
+
+BODY_FILE="$TMPDIR_CLEAN/auth-body"
+printf '{"clientId":"%s","clientSecret":"%s"}' \
+  "$INFISICAL_CLIENT_ID" "$INFISICAL_CLIENT_SECRET" > "$BODY_FILE"
+chmod 0600 "$BODY_FILE"
+
 log "authenticating to Infisical at $INFISICAL_URL"
 AUTH_RESPONSE=$(curl -fsSL --max-time 30 \
   -X POST "$INFISICAL_URL/api/v1/auth/universal-auth/login" \
   -H "Content-Type: application/json" \
-  -d "$(jq -n \
-    --arg id "$INFISICAL_CLIENT_ID" \
-    --arg secret "$INFISICAL_CLIENT_SECRET" \
-    '{clientId:$id, clientSecret:$secret}')" \
+  --data-binary "@$BODY_FILE" \
   ) || die "Infisical auth request failed (network or invalid credentials)"
 
 ACCESS_TOKEN=$(jq -r '.accessToken // empty' <<<"$AUTH_RESPONSE")
 [[ -n "$ACCESS_TOKEN" ]] || die "Infisical auth returned no accessToken"
 
 # === 2. Fetch all secrets ===
+HEADER_FILE="$TMPDIR_CLEAN/auth-header"
+printf 'Authorization: Bearer %s\n' "$ACCESS_TOKEN" > "$HEADER_FILE"
+chmod 0600 "$HEADER_FILE"
+
 log "fetching secrets from project=$INFISICAL_PROJECT_ID env=$INFISICAL_ENV"
 SECRETS_JSON=$(curl -fsSL --max-time 30 \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  "$INFISICAL_URL/api/v3/secrets/raw?workspaceId=$INFISICAL_PROJECT_ID&environment=$INFISICAL_ENV" \
+  -H "@$HEADER_FILE" \
+  "$INFISICAL_URL/api/v4/secrets?projectId=$INFISICAL_PROJECT_ID&environment=$INFISICAL_ENV&recursive=true" \
   ) || die "Infisical secrets fetch failed"
 
+# Validate response shape upfront so a malformed body doesn't silently look
+# like "every secret is missing" downstream. Fail loudly with an alert.
+if ! jq -e '.secrets | type == "array"' <<<"$SECRETS_JSON" >/dev/null 2>&1; then
+  die "Infisical response missing .secrets array (API shape change?)"
+fi
+
 # === 3. Write each integration's files (skip if secret missing) ===
+# Routing table:
+#   github-ssh-key     → CREDS_DIR/github-ssh-key (0600) + ssh-add into agent
+#   gcp-sa-key         → CONFIG_DIR/gcloud/application_default_credentials.json (0644)
+#   cloudflare-token   → CONFIG_DIR/env/cloudflare.sh   (0644, env-export)
+#   hcloud-token       → CONFIG_DIR/env/hetzner.sh       (0644, env-export)
+#   npm-token          → CONFIG_DIR/npm/npmrc            (0644)
+#   pypi-token         → CONFIG_DIR/env/pypi.sh          (0644, env-export for uv/pip)
+#   docker-hub-token   → CONFIG_DIR/env/docker-hub.sh    (0644, env-export)
+#   ntfy-topic         → CREDS_DIR/ntfy-topic            (0600)
 
-# Ensure target directories exist with correct ownership
-install -d -m 0750 -o creds -g creds "$CREDS_DIR"
-install -d -m 0750 -o creds -g creds "$CONFIG_DIR"
-install -d -m 0750 -o creds -g creds "$CONFIG_DIR/env"
-install -d -m 0750 -o creds -g creds "$CONFIG_DIR/gcloud"
-install -d -m 0750 -o creds -g creds "$CONFIG_DIR/npm"
+# --- github-ssh-key (private key + load into ssh-agent) ---
+# Validate the new key BEFORE clearing the agent. If validation fails, keep
+# the existing in-memory key (sshd will keep working with the previous key).
+if val=$(secret_value github-ssh-key) && [[ -n "$val" ]]; then
+  log "validating github-ssh-key from Infisical"
+  TMP_KEY="$TMPDIR_CLEAN/new-ssh-key"
+  printf '%s\n' "$val" > "$TMP_KEY"
+  chmod 0600 "$TMP_KEY"
 
-# --- github-ssh-key (private key file + load into ssh-agent) ---
-if val=$(secret_value github-ssh-key); [[ -n "$val" ]]; then
-  log "writing github-ssh-key"
-  atomic_write "$CREDS_DIR/github-ssh-key" 0600 "$val"
-  # Ensure trailing newline (ssh-add is picky)
-  printf '\n' >> "$CREDS_DIR/github-ssh-key"
-
-  # Reload into ssh-agent: drop all, add fresh
-  if [[ -S "$SSH_AGENT_SOCKET" ]]; then
-    SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add -D 2>/dev/null || true
-    SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add "$CREDS_DIR/github-ssh-key" \
-      || alert "cred-daemon" "ssh-add failed for github-ssh-key"
+  if ssh-keygen -y -P '' -f "$TMP_KEY" >/dev/null 2>&1; then
+    log "new SSH key valid, swapping into agent"
+    install -m 0600 "$TMP_KEY" "$CREDS_DIR/github-ssh-key"
+    if [[ -S "$SSH_AGENT_SOCKET" ]]; then
+      SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add -D 2>/dev/null || true
+      SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add "$CREDS_DIR/github-ssh-key" \
+        || alert "cred-daemon" "ssh-add failed for new github-ssh-key"
+    else
+      log "WARN: ssh-agent socket not present at $SSH_AGENT_SOCKET — cred file updated but not loaded"
+    fi
   else
-    log "WARN: ssh-agent socket not present at $SSH_AGENT_SOCKET — skipping ssh-add"
+    log "ERROR: new github-ssh-key fails ssh-keygen validation; keeping previous key"
+    alert "cred-daemon" "Invalid SSH key in Infisical github-ssh-key; ignored"
   fi
 fi
 
-# --- gcp-sa-key (service account JSON) ---
-if val=$(secret_value gcp-sa-key); [[ -n "$val" ]]; then
+# --- gcp-sa-key (service account JSON, file-read at each gcloud invocation) ---
+if val=$(secret_value gcp-sa-key) && [[ -n "$val" ]]; then
   log "writing gcp-sa-key"
   atomic_write "$CONFIG_DIR/gcloud/application_default_credentials.json" 0644 "$val"
 fi
 
-# --- cloudflare-token (env-export) ---
-if val=$(secret_value cloudflare-token); [[ -n "$val" ]]; then
+# --- cloudflare-token (env-export, footgun: stale in running shells) ---
+if val=$(secret_value cloudflare-token) && [[ -n "$val" ]]; then
   log "writing cloudflare env-export"
+  # ' -> '\'' is shell-safe for any value
   atomic_write "$CONFIG_DIR/env/cloudflare.sh" 0644 \
     "export CLOUDFLARE_API_TOKEN='${val//\'/\'\\\'\'}'"
 fi
 
 # --- hcloud-token (env-export, apps-scope) ---
-if val=$(secret_value hcloud-token); [[ -n "$val" ]]; then
+if val=$(secret_value hcloud-token) && [[ -n "$val" ]]; then
   log "writing hetzner env-export"
   atomic_write "$CONFIG_DIR/env/hetzner.sh" 0644 \
     "export HCLOUD_TOKEN='${val//\'/\'\\\'\'}'"
 fi
 
-# --- npm-token (.npmrc) ---
-if val=$(secret_value npm-token); [[ -n "$val" ]]; then
+# --- npm-token (.npmrc, file-read at each npm/pnpm invocation) ---
+if val=$(secret_value npm-token) && [[ -n "$val" ]]; then
   log "writing npm .npmrc"
   atomic_write "$CONFIG_DIR/npm/npmrc" 0644 \
     "//registry.npmjs.org/:_authToken=${val}"
 fi
 
-# --- ntfy-topic ---
-if val=$(secret_value ntfy-topic); [[ -n "$val" ]]; then
+# --- pypi-token (env-export for uv publish / twine) ---
+if val=$(secret_value pypi-token) && [[ -n "$val" ]]; then
+  log "writing pypi env-export"
+  atomic_write "$CONFIG_DIR/env/pypi.sh" 0644 \
+    "export UV_PUBLISH_TOKEN='${val//\'/\'\\\'\'}'"$'\n'"export TWINE_USERNAME='__token__'"$'\n'"export TWINE_PASSWORD='${val//\'/\'\\\'\'}'"
+fi
+
+# --- docker-hub-token (env-export; consumed by docker login or build tooling) ---
+if val=$(secret_value docker-hub-token) && [[ -n "$val" ]]; then
+  log "writing docker-hub env-export"
+  atomic_write "$CONFIG_DIR/env/docker-hub.sh" 0644 \
+    "export DOCKER_HUB_TOKEN='${val//\'/\'\\\'\'}'"
+fi
+
+# --- ntfy-topic (creds zone; only the alert script reads this) ---
+if val=$(secret_value ntfy-topic) && [[ -n "$val" ]]; then
   atomic_write "$CREDS_DIR/ntfy-topic" 0600 "$val"
 fi
 

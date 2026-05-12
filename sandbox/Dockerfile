@@ -66,14 +66,27 @@ RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/latest/download/hcl
 # --- AI coding CLIs — global install via pnpm ---
 RUN pnpm add -g @anthropic-ai/claude-code @openai/codex
 
-# --- non-root agent user ---
-RUN useradd --create-home --shell /bin/bash --uid 1000 agent \
+# --- non-root agent user + agent-sockets group (GID matches host via subgid mapping) ---
+# The agent-sockets group exists so the sandbox can connect() to the
+# ssh-agent socket on the host. Inside the container the group's GID is
+# arbitrary (3000); on the host, the rootless Docker user's /etc/subgid
+# mapping translates this to the host's agent-sockets GID. Cloud-init
+# configures that mapping.
+RUN groupadd --gid 3000 agent-sockets \
+    && useradd --create-home --shell /bin/bash --uid 1000 \
+       --groups agent-sockets agent \
     && mkdir -p /work \
     && chown agent:agent /work
 
-# --- entrypoint ---
+# --- entrypoint + profile.d sourcing of env-export files ---
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/entrypoint.sh
+COPY profile.d-agent-env.sh /etc/profile.d/agent-env.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh /etc/profile.d/agent-env.sh
+
+# tmux runs a login shell by default for new windows (via default-command);
+# this ensures /etc/profile.d/agent-env.sh is re-sourced for each new window,
+# so rotated env-export values propagate without container restart.
+RUN printf 'set-option -g default-command "/bin/bash -l"\n' >> /etc/tmux.conf
 
 USER agent
 WORKDIR /work
