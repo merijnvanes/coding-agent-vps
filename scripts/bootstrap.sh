@@ -60,9 +60,9 @@ echo
 echo "Next steps (as the merijn user):"
 echo
 echo "  sudo -u merijn -H bash -lc 'cd /opt/agent-vps && docker compose up -d'"
-echo "  sudo -u merijn -H bash -lc 'docker exec -it sandbox bash -l'"
+echo "  sudo -u merijn -H bash -lc 'docker exec -it sandbox tmux attach -t main'"
 echo
-echo "Inside the sandbox container, log in to your AI subscriptions interactively:"
+echo "Inside the tmux session, log in to your AI subscriptions interactively:"
 echo "  claude login"
 echo "  codex login"
 echo

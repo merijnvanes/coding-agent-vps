@@ -108,11 +108,16 @@ install -m 0644 /opt/agent-vps/daemon/ssh-agent-creds.service /etc/systemd/syste
 systemctl daemon-reload
 # ssh-agent for creds — must be running before cred-daemon attempts ssh-add
 systemctl enable --now ssh-agent-creds.service
-# Daily refresh timer. cred-daemon.service itself is NOT enabled directly —
-# it's a oneshot triggered by the timer and by manual `systemctl start`.
-# --now starts the timer in this boot so the first refresh schedule is live
+# Daily refresh timer. --now starts it in this boot so the schedule is live
 # without waiting for a reboot.
 systemctl enable --now cred-daemon.timer
+# Also enable cred-daemon.service for boot. It's a oneshot wanted by
+# multi-user.target — running at boot ensures ssh-agent gets the GitHub
+# SSH key loaded after every reboot (otherwise the agent stays empty
+# until the next timer fire or a manual `systemctl start cred-daemon`).
+# We don't `--now` here because the bootstrap secret doesn't exist yet
+# at cloud-init time; bootstrap.sh triggers the first manual run.
+systemctl enable cred-daemon.service
 
 log "cloud-init-tasks complete."
 log "Next: SSH in via Tailscale, then run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"
