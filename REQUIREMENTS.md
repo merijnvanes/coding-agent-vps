@@ -40,7 +40,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 - **MUST** — Mixed interactive + occasional longer runs.
 - **MUST** — Single laptop, primary driver. Multi-laptop / device-portability is not in scope.
-- **MUST** — Multiple projects in parallel on the same VPS, no internal walls between them. If a project needs stronger isolation, spin up a separate VPS for it (do not retrofit internal walls into v1).
+- **MUST** — Multiple projects in parallel on the same VPS, no internal walls between them. If a project needs stronger isolation, spin up a separate VPS in its own Hetzner project for it (do not retrofit internal walls into v1).
 - **SHOULD** — Replicate the laptop development experience reasonably closely, just relocated to the VPS.
 - **WON'T** — Multi-user / team collaboration. This is a personal setup.
 - **WON'T** — IDE / VS Code Remote / IDE-over-SSH integration. I don't use an IDE; terminal-only.
@@ -57,7 +57,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 - **MUST** — Source control: GitHub git operations via SSH key only (signing oracle — private key stays in the creds zone, no bearer token in sandbox).
 - **MUST** — Publishing: npm/PyPI/Docker Hub publish tokens.
 - **MUST** — Cloud infra & app platforms: Cloudflare, GCP, Hetzner — the platforms I actually deploy to. Corresponding CLIs (`wrangler`, `gcloud`, `hcloud`) baked into the sandbox image.
-- **MUST** — Agent's `HCLOUD_TOKEN` is **apps-only scope**: can manage deployed-app resources on Hetzner Cloud, cannot delete or modify the agent-vps server itself. VPS-level Hetzner administration uses a separate admin credential kept on the laptop, not in the sandbox. This preserves the "kill from Hetzner panel" backstop even if the agent is fully compromised.
+- **MUST** — The agent VPS lives in a dedicated Hetzner Cloud project (e.g. `secure-agent-vps`), separate from any project where apps are deployed. The agent's `HCLOUD_TOKEN` is scoped to the **apps project(s) only** — it has no permissions in the agent-vps project, so even a fully compromised agent cannot reach its own host. The admin token for the agent-vps project lives on the laptop (password manager) and is used for provisioning and the "kill from Hetzner panel" backstop.
 - **MUST** — LLM auth: Claude Max + Codex Pro subscriptions via interactive OAuth. OAuth is the only auth method that routes usage through subscription billing; API keys would bill against separate pay-per-use API accounts at significantly higher cost. The interactive bootstrap step (§6) and in-sandbox refresh-token residual (§5) are accepted as the price of subscription billing.
 - **WON'T (v1)** — Production database connection strings, signing keys, JWT secrets. Production app secrets live in the production environment (Vercel/Cloudflare env vars), not on the VPS. The agent triggers deploys via cloud-platform creds; the platform mounts secrets at runtime.
 - **WON'T (v1)** — Financial / payment APIs (Stripe etc.). Same logic: live in prod environment, not on VPS.
