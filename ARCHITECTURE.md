@@ -1,4 +1,4 @@
-# Architecture — Secure Agent VPS
+# Architecture — Coding Agent VPS
 
 Concrete component layout and data flows for the system specified in [REQUIREMENTS.md](./REQUIREMENTS.md).
 
@@ -40,14 +40,14 @@ Concrete component layout and data flows for the system specified in [REQUIREMEN
 
 ## Hetzner project topology
 
-The agent VPS lives in its **own dedicated Hetzner Cloud project** (e.g. `secure-agent-vps`), separate from any project where the user actually deploys apps. Two distinct Hetzner API tokens:
+The agent VPS lives in its **own dedicated Hetzner Cloud project** (e.g. `coding-agent-vps`), separate from any project where the user actually deploys apps. Two distinct Hetzner API tokens:
 
 | Token | Scope | Where it lives | What it can do |
 |---|---|---|---|
-| **Admin token** for `secure-agent-vps` project | full admin on the agent-vps project (this VPS, its firewall, its volumes) | Laptop only — kept in password manager, never enters the VPS | Provision/destroy the VPS, attach firewall, killswitch backstop |
+| **Admin token** for `coding-agent-vps` project | full admin on the agent-vps project (this VPS, its firewall, its volumes) | Laptop only — kept in password manager, never enters the VPS | Provision/destroy the VPS, attach firewall, killswitch backstop |
 | **Agent token** for user's apps project(s) | full access within those projects only | Stored in Infisical, fetched by cred-daemon, mounted into sandbox as `HCLOUD_TOKEN` | Deploy and manage app resources for the user's actual workloads |
 
-Cross-project isolation is at the Hetzner API level: the agent's `HCLOUD_TOKEN` doesn't have any permissions in the `secure-agent-vps` project — even a fully compromised agent cannot list, modify, or delete the agent-vps VPS itself.
+Cross-project isolation is at the Hetzner API level: the agent's `HCLOUD_TOKEN` doesn't have any permissions in the `coding-agent-vps` project — even a fully compromised agent cannot list, modify, or delete the agent-vps VPS itself.
 
 **Scaling pattern**: if a future project needs an isolated VPS (per REQUIREMENTS.md §3), it gets its own Hetzner project. Each VPS lives behind its own admin-token boundary.
 
@@ -134,10 +134,10 @@ The cred-daemon does **not** mint, rotate, or otherwise call any upstream servic
 
 **Scope note**: this is the *full VPS rebuild* flow (destroy server → recreate). For container-only refresh (watchtower image update, `docker compose up -d` after a Dockerfile change), the named volume `sandbox-state` persists, so OAuth tokens and tmux state survive — no OAuth re-login needed. Full VPS rebuild loses the volume (no backups in v1 — see REQUIREMENTS.md §6) and requires re-OAuth.
 
-Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using the admin token for the `secure-agent-vps` Hetzner project (kept in laptop's password manager; never enters the VPS).
+Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using the admin token for the `coding-agent-vps` Hetzner project (kept in laptop's password manager; never enters the VPS).
 
 1. **Generate fresh Tailscale auth-key** from Tailscale admin UI (single-use, ≤24h TTL).
-2. **Provision** (against the `secure-agent-vps` Hetzner project): `hcloud server create --firewall=agent-vps-deny-all ...` (firewall pre-created with v4+v6 deny-all inbound rules, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), enables ufw (`ufw default deny incoming` covers both v4 and v6), clones `https://github.com/merijnvanes/secure-agent-vps` to `/opt/agent-vps/`, builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral Tailscale key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
+2. **Provision** (against the `coding-agent-vps` Hetzner project): `hcloud server create --firewall=agent-vps-deny-all ...` (firewall pre-created with v4+v6 deny-all inbound rules, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), enables ufw (`ufw default deny incoming` covers both v4 and v6), clones `https://github.com/merijnvanes/coding-agent-vps` to `/opt/agent-vps/`, builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral Tailscale key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
 3. **SSH in** from laptop via Tailscale.
 4. **Paste — Infisical Universal Auth client secret** into `/etc/agent-vps/infisical-uauth` (0600 creds:creds).
 5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`.
@@ -179,7 +179,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 
 /srv/dev/projects/                merijn:merijn   # mounted rw into sandbox at /work
 
-/opt/agent-vps/                   root:root      # cloned from https://github.com/merijnvanes/secure-agent-vps at cloud-init time
+/opt/agent-vps/                   root:root      # cloned from https://github.com/merijnvanes/coding-agent-vps at cloud-init time
   daemon/                                       # systemd service unit + main loop (fetch from Infisical, serve sockets)
   integrations/                                 # per-CLI integration shims (write ADC file / env exports / config files)
   alerts/                                       # ntfy publisher
