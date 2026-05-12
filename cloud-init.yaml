@@ -38,7 +38,7 @@ runcmd:
   # 2. Tailscale: install and join. --ssh enables Tailscale SSH (no
   #    authorized_keys management needed; auth via tailnet identity).
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --auth-key=__TAILSCALE_AUTH_KEY__ --hostname=coding-agent-vps --ssh --accept-routes
+  - tailscale up --auth-key=__TAILSCALE_AUTH_KEY__ --hostname=coding-agent-vps --advertise-tags=tag:coding-agent-vps --ssh --accept-routes
 
   # 3. Clone the repo and run the host-setup script.
   - mkdir -p /opt/agent-vps

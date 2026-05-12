@@ -78,9 +78,34 @@ ssh-keygen -t ed25519 -f ~/Downloads/coding-agent-vps-key -C "coding-agent-vps@$
 
 - [ ] You already have a Tailscale account on your laptop (otherwise see
       https://tailscale.com).
-- [ ] Tailscale ACL: deny by default, with an explicit `accept` rule from
-      your laptop's tag/host to the agent-vps host. **NO rule going the
+- [ ] Tailscale **ACL** (network-level): deny by default, with an explicit
+      `accept` rule from your laptop to the agent-vps. **NO rule going the
       other direction.** Manage in https://login.tailscale.com/admin/acls.
+- [ ] Tailscale **SSH policy** (a separate section in the same ACL file):
+      Tailscale SSH is gated independently of the network ACL — you must
+      add an `ssh` rule explicitly allowing your tailnet user to log in as
+      `merijn` on the agent-vps. Example fragment:
+
+      ```json
+      {
+        "ssh": [
+          {
+            "action": "accept",
+            "src": ["autogroup:member"],
+            "dst": ["tag:coding-agent-vps"],
+            "users": ["merijn"]
+          }
+        ],
+        "tagOwners": {
+          "tag:coding-agent-vps": ["autogroup:member"]
+        }
+      }
+      ```
+
+      (The tag is applied at provision time via `tailscale up --advertise-tags=tag:coding-agent-vps`,
+      or you can tag it manually after first connect.) Without this, the
+      first `ssh merijn@coding-agent-vps` will be rejected even though the
+      network ACL allows it.
 
 ### Laptop
 
@@ -134,10 +159,18 @@ Final step (as the `merijn` user):
 
 ```bash
 sudo -u merijn -H bash -lc 'cd /opt/agent-vps && docker compose up -d'
-sudo -u merijn -H bash -lc 'docker exec -it sandbox bash -l'
 ```
 
-You land in a tmux session inside the sandbox. Inside there:
+The container starts detached. The container's entrypoint runs
+`tmux new -A -s main` on its own internal TTY; you attach to that session
+explicitly:
+
+```bash
+sudo -u merijn -H bash -lc 'docker exec -it sandbox tmux attach -t main'
+```
+
+You're now inside the tmux session in the sandbox. Log in to your AI
+subscriptions interactively:
 
 ```bash
 claude login   # interactive OAuth, browser flow on your laptop
@@ -151,7 +184,7 @@ Detach from tmux (`Ctrl-b d`) and you're done.
 ## Day-to-day use
 
 - **Enter the sandbox**: `ssh merijn@coding-agent-vps`, then
-  `sudo -u merijn -H bash -lc 'docker exec -it sandbox bash -l'`.
+  `sudo -u merijn -H bash -lc 'docker exec -it sandbox tmux attach -t main'`.
 - **Run an agent**: from inside the sandbox, just run `claude` or `codex`.
 - **Persistent sessions**: tmux is the default entrypoint, so sessions
   survive SSH disconnects.
@@ -206,11 +239,17 @@ flow):
 The script detects an existing server with the same name and asks before
 deleting it.
 
-- Subsequent rebuilds reuse the same `sandbox-state` Docker volume
-  (preserves OAuth tokens), so steps 7–9 in the initial walkthrough are
-  skipped.
-- If you destroy the VPS entirely (volumes included), you redo the OAuth
-  logins. Adds ~2 min.
+**Two flavors of rebuild:**
+
+- **Container rebuild** (most common — Dockerfile change, image refresh):
+  Docker volumes (`sandbox-state-claude`, `sandbox-state-codex`) persist
+  on the VPS's local disk. `claude login` / `codex login` not needed
+  again. Run: `sudo -u merijn -H bash -lc 'cd /opt/agent-vps && docker compose up -d --build'`
+- **Full VPS rebuild** (running `scripts/provision.sh`): the existing
+  server is deleted, including all local disk and Docker volumes. You
+  redo the OAuth logins. Adds ~2 min. To survive a full VPS rebuild you'd
+  need a separately-attached Hetzner Cloud volume, which is not in v1
+  scope (REQUIREMENTS.md §6: backups are WON'T-v1).
 
 ---
 

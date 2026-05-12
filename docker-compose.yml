@@ -17,12 +17,6 @@ services:
     stdin_open: true
     tty: true
 
-    # Sandbox needs membership in the host's `agent-sockets` group so it can
-    # connect() to the ssh-agent socket. The actual mapping is configured via
-    # rootless Docker's subgid setup at cloud-init time.
-    group_add:
-      - "agent-sockets"
-
     volumes:
       # Sockets (ssh-agent) — read+write on the *socket inode*, no unlink
       - type: bind

@@ -8,20 +8,19 @@ User=creds
 Group=creds
 # Sockets dir is 0755 so the rootless-Docker-mapped sandbox UID can traverse
 # it. Actual access to the socket file is gated by the socket's own mode
-# (0660) + the agent-sockets group, which the sandbox container is added to
+# (0666); the agent-sockets group approach was dropped because rootless
 # via subgid mapping configured at cloud-init time.
 # PRECONDITION (set up at cloud-init time):
-#   - groups: agent-sockets exists; creds user is a member
-#   - directories: /var/lib/agent-vps/{,sockets} exist, owned by creds
-# Running as User=creds: chgrp to a group we're a member of is permitted
-# without CAP_CHOWN; install -d defaults to caller's uid/gid.
+#   - directories: /var/lib/agent-vps/{,sockets} exist
+# Socket mode 0666 — every local process that can traverse the sockets dir
+# can connect(). On this host the local process set is {root, creds, merijn,
+# rootless-Docker-mapped UIDs from merijn's subuid range}, all of which are
+# trusted by the design. Group-gated 0660 would require a custom user-
+# namespace mapping that rootless Docker doesn't cleanly expose; the practical
+# access set is identical. Documented as accepted residual.
 ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
-# -a sets the socket path; ssh-agent creates the file 0600 owned by creds:creds.
 ExecStart=/usr/bin/ssh-agent -a /var/lib/agent-vps/sockets/ssh-agent.sock
-# Hand the socket over to the agent-sockets group with 0660 so the sandbox
-# (via subgid-mapped membership) can connect() but cannot unlink().
-ExecStartPost=/bin/chgrp agent-sockets /var/lib/agent-vps/sockets/ssh-agent.sock
-ExecStartPost=/bin/chmod 0660 /var/lib/agent-vps/sockets/ssh-agent.sock
+ExecStartPost=/bin/chmod 0666 /var/lib/agent-vps/sockets/ssh-agent.sock
 KillMode=mixed
 # Hardening
 NoNewPrivileges=true

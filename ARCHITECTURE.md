@@ -170,8 +170,8 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
     env/
       cloudflare.sh                         0644  creds:creds  # sourced by entrypoint → CLOUDFLARE_API_TOKEN
       hetzner.sh                            0644  creds:creds  # sourced by entrypoint → HCLOUD_TOKEN (apps-only)
-  sockets/                                     # mounted into sandbox; group-shared for rootless Docker subgid mapping
-    ssh-agent.sock         0660  creds:agent-sockets
+  sockets/                                     # mounted into sandbox; 0755 dir, 0666 socket file
+    ssh-agent.sock         0666  creds:creds
   sandbox-state/                               # named Docker volume — persists across container/image refresh
     home-claude/                               # /home/agent/.claude (OAuth refresh tokens)
     home-codex/                                # /home/agent/.codex (OAuth refresh tokens)
@@ -189,7 +189,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 ```
 
 **Sandbox mounts (rootless Docker):**
-- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (sandbox user mapped via subgid to GID `agent-sockets` — can `connect()` to sockets, cannot `unlink()` files in the dir)
+- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (socket mode 0666 — every local process can connect; on this single-user host that's only the rootless container, merijn, and root, all trusted by design)
 - `/var/lib/agent-vps/agent-config/gcloud/` → `/home/agent/.config/gcloud/` (read-only)
 - `/var/lib/agent-vps/agent-config/npm/npmrc` → `/home/agent/.npmrc` (read-only)
 - `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; entrypoint sources `*.sh` on shell start to set env-var creds)

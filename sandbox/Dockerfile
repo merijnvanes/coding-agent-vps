@@ -66,17 +66,17 @@ RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/latest/download/hcl
 # --- AI coding CLIs — global install via pnpm ---
 RUN pnpm add -g @anthropic-ai/claude-code @openai/codex
 
-# --- non-root agent user + agent-sockets group (GID matches host via subgid mapping) ---
-# The agent-sockets group exists so the sandbox can connect() to the
-# ssh-agent socket on the host. Inside the container the group's GID is
-# arbitrary (3000); on the host, the rootless Docker user's /etc/subgid
-# mapping translates this to the host's agent-sockets GID. Cloud-init
-# configures that mapping.
-RUN groupadd --gid 3000 agent-sockets \
-    && useradd --create-home --shell /bin/bash --uid 1000 \
-       --groups agent-sockets agent \
+# --- non-root agent user ---
+# Pre-create the volume mount paths so named volumes inherit agent:agent
+# ownership on first attach (Docker copies the existing dir's mode/ownership
+# into an empty named volume). Without this, first `claude login` etc. would
+# write to a root-owned volume and fail.
+RUN useradd --create-home --shell /bin/bash --uid 1000 agent \
     && mkdir -p /work \
-    && chown agent:agent /work
+                /home/agent/.claude \
+                /home/agent/.codex \
+                /home/agent/.local/state/agent-state \
+    && chown -R agent:agent /work /home/agent
 
 # --- entrypoint + env-export sourcing for ALL shell flavors ---
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
