@@ -68,8 +68,10 @@ Key design principle: **security boundary is the sandbox, not per-action approva
 ### Sandbox boundary
 
 - **MUST** — Agent runs inside an OS-level sandbox (container or equivalent) on the VPS.
+- **MUST** — Sandbox runs under rootless Docker (or equivalent: Docker with user-namespace remapping, Podman rootless). Default rootful Docker is disallowed — it maps container-root to host-root and negates the "separate user / namespace" boundary.
 - **MUST** — Sandbox cannot read raw credential files. Keys live in a separate user / namespace.
 - **MUST** — Sandbox accesses credentials via narrow local interfaces (ssh-agent socket, credential helper) — never as raw key material.
+- **MUST** — The Infisical Universal Auth bootstrap secret is stored in a path readable only by the cred-daemon's user (e.g. `/etc/agent-vps/infisical-uauth`, mode 0600, owned by the `creds` user). The sandbox container has no mount or read access to this path.
 - **Acknowledged** — Claude Code / Codex OAuth refresh tokens live inside the sandbox by necessity (the agent CLI needs them). The agent process can read its own auth state. Impact is bounded to LLM API spend within Anthropic/OpenAI's account, but the "no raw credentials in sandbox" claim has this exception.
 
 ### Network policy
@@ -133,11 +135,12 @@ Defenses below are not equally load-bearing. To be honest about scope:
 
 Day-1 contents of the sandbox image:
 
-- **Base**: `bash`, `git`, `curl`, `gh`
+- **Base**: `bash`, `git`, `curl`, `gh`, `tmux`
 - **Agents**: `claude-code`, `codex`
 - **Runtimes + package managers**: Node + `pnpm`, Python + `uv`
 - **Deploy CLIs**: `wrangler` (Cloudflare), `gcloud` (GCP), `hcloud` (Hetzner)
 
+- **SHOULD** — Agent sessions run inside `tmux` so SSH disconnects and container restarts don't kill in-progress work.
 - **SHOULD** — The image build is version-controlled (Dockerfile in a repo). Changes are auditable and reversible.
 - **Acknowledged** — A minimal image is NOT a hard command allowlist: anything with a working package manager (or `bash` + `curl`) can install more at runtime. The value is reducing the *default* attack surface, not a per-action gate.
 - **COULD (later phase)** — Tighten further with read-only filesystem, non-root user, and seccomp/AppArmor profiles that block writes to system bin dirs. Meaningful against active attackers, but added complexity.
@@ -164,6 +167,7 @@ Day-1 contents of the sandbox image:
 ### Logging / observability
 
 - **SHOULD** — Basic visibility (refresh-daemon logs, sandbox start/stop records) if low cost and low effort. Don't build elaborate logging infra for it.
+- **SHOULD** — Minimal alerting on (a) Infisical refresh failures, (b) production deploy events, (c) Anthropic/OpenAI rate-limit hits (proxy for runaway use). Delivery via email or ntfy/Pushover — a ~20-line script, not an observability stack.
 - **WON'T (v1)** — Compliance-grade audit logging with full attribution.
 
 ## 7. Constraints & preferences
@@ -193,5 +197,6 @@ Day-1 contents of the sandbox image:
 - Compliance / audit logging
 - Network egress allowlist on the sandbox — matches the unrestricted-egress baseline on the laptop; revisit only if a project's data-sensitivity changes
 - Project-internal isolation (one compromised project shielded from siblings) — deferred; spawn separate VPS per isolated-project if/when needed
+- Per-project credential scoping (e.g. GitHub tokens narrowed per-repo). The laptop uses unified credentials across all projects; narrowing them only on the VPS would violate parity and add config complexity. Cross-project leakage residual is acknowledged in §2.
 
 
