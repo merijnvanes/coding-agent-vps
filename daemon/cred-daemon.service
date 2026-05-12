@@ -1,0 +1,22 @@
+[Unit]
+Description=Coding Agent VPS credential daemon — fetch from Infisical to local cache
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+Wants=network-online.target ssh-agent-creds.service
+After=network-online.target ssh-agent-creds.service
+
+[Service]
+Type=oneshot
+User=creds
+Group=creds
+ExecStart=/opt/agent-vps/daemon/cred-daemon.sh
+# Read-only access to bootstrap secret + config
+ReadOnlyPaths=/etc/agent-vps
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-vps
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

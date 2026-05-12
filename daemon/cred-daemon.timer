@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily credential refresh from Infisical
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+
+[Timer]
+# Daily at 04:00 UTC. UTC chosen deliberately so behavior is identical
+# regardless of where the host's TZ ends up after cloud-init.
+OnCalendar=*-*-* 04:00:00 UTC
+# Catch up if the system was off when the timer should have fired
+Persistent=true
+Unit=cred-daemon.service
+
+[Install]
+WantedBy=timers.target

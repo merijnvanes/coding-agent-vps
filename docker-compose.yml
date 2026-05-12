@@ -1,0 +1,68 @@
+# docker-compose.yml — sandbox container spec
+#
+# Runs under rootless Docker as user `merijn` (the human SSH user).
+# Mounts the per-CLI credential files (read-only) and the project working tree.
+# OAuth refresh tokens + tmux state live in the named volume `sandbox-state`,
+# which survives image refresh / container restart.
+
+services:
+  sandbox:
+    build:
+      context: ./sandbox
+      dockerfile: Dockerfile
+    image: coding-agent-vps/sandbox:latest
+    container_name: sandbox
+    hostname: sandbox
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+    # Sandbox needs membership in the host's `agent-sockets` group so it can
+    # connect() to the ssh-agent socket. The actual mapping is configured via
+    # rootless Docker's subgid setup at cloud-init time.
+    group_add:
+      - "agent-sockets"
+
+    volumes:
+      # Sockets (ssh-agent) — read+write on the *socket inode*, no unlink
+      - type: bind
+        source: /var/lib/agent-vps/sockets
+        target: /run/sockets
+        read_only: false
+
+      # Per-CLI credential files — read-only from the sandbox side
+      - type: bind
+        source: /var/lib/agent-vps/agent-config/gcloud
+        target: /home/agent/.config/gcloud
+        read_only: true
+      - type: bind
+        source: /var/lib/agent-vps/agent-config/npm/npmrc
+        target: /home/agent/.npmrc
+        read_only: true
+      - type: bind
+        source: /var/lib/agent-vps/agent-config/env
+        target: /run/agent-env
+        read_only: true
+
+      # Project working tree (rw)
+      - type: bind
+        source: /srv/dev/projects
+        target: /work
+        read_only: false
+
+      # Sandbox state — OAuth tokens + tmux session state. Named volume,
+      # survives image refresh.
+      - sandbox-state:/home/agent/.local/state/agent-state
+      - sandbox-state-claude:/home/agent/.claude
+      - sandbox-state-codex:/home/agent/.codex
+
+    environment:
+      # ssh-agent socket path (must match entrypoint.sh)
+      SSH_AUTH_SOCK: /run/sockets/ssh-agent.sock
+      # gcloud reads ADC from this path by default; set explicitly to be safe
+      GOOGLE_APPLICATION_CREDENTIALS: /home/agent/.config/gcloud/application_default_credentials.json
+
+volumes:
+  sandbox-state:
+  sandbox-state-claude:
+  sandbox-state-codex:

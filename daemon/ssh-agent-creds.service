@@ -1,0 +1,27 @@
+[Unit]
+Description=SSH agent for the creds user (signing oracle for sandbox git ops)
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+
+[Service]
+Type=forking
+User=creds
+Group=creds
+# Run ssh-agent and have it create the socket where the sandbox expects.
+# -a sets the socket path; ssh-agent will create the file with mode 0600
+# owned by creds:creds — we fix the mode + group in ExecStartPost so the
+# sandbox container (subgid mapped into agent-sockets group) can connect.
+ExecStartPre=/usr/bin/install -d -m 0750 -o creds -g creds /var/lib/agent-vps/sockets
+ExecStart=/usr/bin/ssh-agent -a /var/lib/agent-vps/sockets/ssh-agent.sock
+ExecStartPost=/bin/chgrp agent-sockets /var/lib/agent-vps/sockets/ssh-agent.sock
+ExecStartPost=/bin/chmod 0660 /var/lib/agent-vps/sockets/ssh-agent.sock
+# ssh-agent doesn't have a graceful stop; let systemd terminate it
+KillMode=mixed
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-vps
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
