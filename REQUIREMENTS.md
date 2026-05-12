@@ -8,7 +8,10 @@ I run AI coding CLIs (Claude Code, Codex) routinely in `--dangerously-skip-permi
 
 The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a VPS**, so a worst-case agent compromise is bounded — without giving up the YOLO ergonomics that make agents useful.
 
-Key design principle: **security boundary is the sandbox, not per-action approval.** Inside the box: agent runs freely, no prompts. Outside the box: hard limits the agent cannot bypass.
+**Key design principles:**
+
+- **Security boundary is the sandbox, not per-action approval.** Inside the box: agent runs freely, no prompts. Outside the box: hard limits the agent cannot bypass.
+- **The VPS hardens credential *storage and access*, not credential *usage*.** What the agent can do once authenticated matches the laptop's experience. The whole project derisks creds at rest and in transit — not at the moment of action. Anything that would narrow what the agent does once authenticated (egress filtering, per-project token scoping, deploy gates, command allowlists) is out of scope by definition.
 
 ## 2. Threat model
 
@@ -195,8 +198,8 @@ Day-1 contents of the sandbox image:
 - Financial / payment API keys in scope
 - High availability / uptime SLAs
 - Compliance / audit logging
-- Network egress allowlist on the sandbox — matches the unrestricted-egress baseline on the laptop; revisit only if a project's data-sensitivity changes
-- Project-internal isolation (one compromised project shielded from siblings) — deferred; spawn separate VPS per isolated-project if/when needed
-- Per-project credential scoping (e.g. GitHub tokens narrowed per-repo). The laptop uses unified credentials across all projects; narrowing them only on the VPS would violate parity and add config complexity. Cross-project leakage residual is acknowledged in §2.
+- Network egress allowlist on the sandbox *(usage-restriction; see §1 principle)*
+- Project-internal isolation — spawn separate VPS per isolated-project if needed *(usage-restriction)*
+- Per-project credential scoping (e.g. GitHub tokens narrowed per-repo) *(usage-restriction)*
 
 
