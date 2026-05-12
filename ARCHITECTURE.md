@@ -98,14 +98,12 @@ There is no single "credential socket protocol." Each non-SSH CLI consumes crede
 | CLI | Where it reads creds | What cred-daemon writes |
 |---|---|---|
 | `git` (SSH) | `SSH_AUTH_SOCK` | ssh-agent socket — signing oracle, no raw key in sandbox |
-| `git` (HTTPS) | git credential-helper protocol | socket-backed helper that returns the GitHub token |
-| `gh` | `~/.config/gh/hosts.yml` | the GitHub token (config file) |
 | `gcloud` | `~/.config/gcloud/application_default_credentials.json` | the SA key JSON (file) |
 | `wrangler` | `CLOUDFLARE_API_TOKEN` env var | env-export script the agent sources at startup |
 | `hcloud` | `HCLOUD_TOKEN` env var | env-export script |
 | `npm` (publish) | `~/.npmrc` `_authToken` | per-registry auth line (config file) |
 
-All of these except SSH put the raw bearer token somewhere the sandbox process can read at use-time. SSH via ssh-agent is the only true signing oracle (private key never enters the sandbox). Tightening this for `git` operations is open decision #1 (HTTPS → SSH for git).
+All of these except SSH put the raw bearer token somewhere the sandbox process can read at use-time. SSH via ssh-agent is the only true signing oracle (private key never enters the sandbox). For `git` operations we use SSH only; the agent does not have `gh` or any other GitHub API tooling in-sandbox — those operations happen from the laptop instead.
 
 ## Daily refresh flow
 
@@ -145,7 +143,6 @@ Triggered when the VPS is destroyed/compromised/lost:
 
 /var/lib/agent-vps/
   creds/                                       # raw key material — sandbox cannot see this
-    github-pat             0600  creds:creds
     gcp-sa-key.json        0600  creds:creds
     cloudflare-token       0600  creds:creds
     hetzner-token          0600  creds:creds
@@ -207,5 +204,6 @@ Tracking back to REQUIREMENTS.md residuals and non-goals:
 - Does not filter outbound traffic from the sandbox (§5 + §8: parity with laptop).
 - Does not gate any specific action (per-action approval, deploy approval, protected branches) — by design (§1 principle).
 - Does not protect against a laptop compromise reaching the VPS over Tailscale (§2 out of scope).
+- Does not provide GitHub API access from the sandbox (no `gh` CLI, no PAT). Git operations use SSH only (signing oracle, no bearer token in sandbox); PR creation, issues, and CI status happen from the laptop.
 
 These are explicit choices, not gaps.

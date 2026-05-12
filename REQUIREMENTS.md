@@ -54,11 +54,13 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 ### Credential categories the system needs to handle
 
-- **MUST** — Source control + publishing: GitHub push/API, npm/PyPI/Docker Hub publish tokens.
+- **MUST** — Source control: GitHub git operations via SSH key only (signing oracle — private key stays in the creds zone, no bearer token in sandbox).
+- **MUST** — Publishing: npm/PyPI/Docker Hub publish tokens.
 - **MUST** — Cloud infra & app platforms: Cloudflare, GCP, Hetzner — the platforms I actually deploy to. Corresponding CLIs (`wrangler`, `gcloud`, `hcloud`) baked into the sandbox image.
 - **MUST** — LLM auth: Claude Max + Codex Pro subscriptions via interactive OAuth. OAuth is the only auth method that routes usage through subscription billing; API keys would bill against separate pay-per-use API accounts at significantly higher cost. The interactive bootstrap step (§6) and in-sandbox refresh-token residual (§5) are accepted as the price of subscription billing.
 - **WON'T (v1)** — Production database connection strings, signing keys, JWT secrets. Production app secrets live in the production environment (Vercel/Cloudflare env vars), not on the VPS. The agent triggers deploys via cloud-platform creds; the platform mounts secrets at runtime.
 - **WON'T (v1)** — Financial / payment APIs (Stripe etc.). Same logic: live in prod environment, not on VPS.
+- **WON'T (v1)** — GitHub PAT / `gh` CLI / GitHub API access from the sandbox. PR creation, issue management, CI status, and other GitHub API operations happen from the laptop. The agent on the VPS uses `git` push/pull via SSH only.
 
 ### Agent capabilities
 
@@ -139,7 +141,7 @@ Defenses below are not equally load-bearing. To be honest about scope:
 
 Day-1 contents of the sandbox image:
 
-- **Base**: `bash`, `git`, `curl`, `gh`, `tmux`
+- **Base**: `bash`, `git`, `curl`, `tmux`
 - **Agents**: `claude-code`, `codex`
 - **Runtimes + package managers**: Node + `pnpm`, Python + `uv`
 - **Deploy CLIs**: `wrangler` (Cloudflare), `gcloud` (GCP), `hcloud` (Hetzner)
