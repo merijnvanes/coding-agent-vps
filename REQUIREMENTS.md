@@ -14,9 +14,9 @@ Key design principle: **security boundary is the sandbox, not per-action approva
 
 ### What we're defending against (all weighted equally)
 
-- **MUST** — Credential cascade (worm): agent reads creds from my environment, exfils them, attacker mass-publishes poisoned packages from my GitHub/npm accounts.
+- **MUST** — Credential cascade (worm): agent reads creds from my environment, exfils them, attacker mass-publishes poisoned packages from my GitHub/npm accounts. *(Acknowledged residual: an active-attack agent can still **use** credentials in-session via ssh-agent / CLIs to push, publish, or deploy — even without seeing raw key material. Bounded by daily re-mint, not eliminated. Multi-project sharing — see §3 — means a compromise in one project's deps reaches all other projects' tokens.)*
 - **MUST** — Code / IP / data leakage: agent reads files it shouldn't (private repos, `.env`, client code) and exfils them. *(Acknowledged residual: under active agent compromise, whatever is currently mounted into the sandbox is reachable. Mitigated by keeping mounted scope minimal and recoverable from GitHub, not by trying to make the sandbox unreadable.)*
-- **MUST** — Identity hijack: stolen GitHub/npm creds used to push malicious commits as me, damaging reputation and downstream users.
+- **MUST** — Identity hijack: stolen GitHub/npm creds used to push malicious commits as me, damaging reputation and downstream users. *(Acknowledged residual: the system bounds **duration** of hijack via daily re-mint, not **impact during the window**. No protected-branch enforcement or commit-signing requirement in v1.)*
 - **MUST** — Runaway LLM / cloud bill: stolen API key racks up large charges before I notice.
 
 ### Attacker capability we're modeling
@@ -29,8 +29,9 @@ Key design principle: **security boundary is the sandbox, not per-action approva
 ### Out of scope (explicitly)
 
 - Nation-state attackers with physical access to my devices.
-- Compromise of Tailscale, Hetzner, or whichever wallet vendor we choose at the infrastructure level (treated as trusted dependencies — see §7).
+- Compromise of Tailscale, Hetzner, or Infisical at the infrastructure level (treated as trusted dependencies — see §7).
 - Side-channel attacks (timing, electromagnetic, etc.).
+- Laptop compromise → VPS via Tailscale. The laptop is on the tailnet by design and can reach the VPS; a fully-owned laptop reaches the VPS too. The project's value is bounding *agent-on-VPS* compromise from reaching back into the laptop, not the other direction.
 
 ## 3. Usage patterns
 
@@ -52,7 +53,7 @@ Key design principle: **security boundary is the sandbox, not per-action approva
 
 - **MUST** — Source control + publishing: GitHub push/API, npm/PyPI/Docker Hub publish tokens.
 - **MUST** — Cloud infra & app platforms: Cloudflare, GCP, Hetzner — the platforms I actually deploy to. Corresponding CLIs (`wrangler`, `gcloud`, `hcloud`) baked into the sandbox image.
-- **MUST** — LLM auth: Claude Pro/Max subscription via interactive OAuth (no long-lived API key needed).
+- **MUST** — LLM auth: Claude Max + Codex Pro subscriptions via interactive OAuth. OAuth is the only auth method that routes usage through subscription billing; API keys would bill against separate pay-per-use API accounts at significantly higher cost. The interactive bootstrap step (§6) and in-sandbox refresh-token residual (§5) are accepted as the price of subscription billing.
 - **WON'T (v1)** — Production database connection strings, signing keys, JWT secrets. Production app secrets live in the production environment (Vercel/Cloudflare env vars), not on the VPS. The agent triggers deploys via cloud-platform creds; the platform mounts secrets at runtime.
 - **WON'T (v1)** — Financial / payment APIs (Stripe etc.). Same logic: live in prod environment, not on VPS.
 
@@ -69,6 +70,7 @@ Key design principle: **security boundary is the sandbox, not per-action approva
 - **MUST** — Agent runs inside an OS-level sandbox (container or equivalent) on the VPS.
 - **MUST** — Sandbox cannot read raw credential files. Keys live in a separate user / namespace.
 - **MUST** — Sandbox accesses credentials via narrow local interfaces (ssh-agent socket, credential helper) — never as raw key material.
+- **Acknowledged** — Claude Code / Codex OAuth refresh tokens live inside the sandbox by necessity (the agent CLI needs them). The agent process can read its own auth state. Impact is bounded to LLM API spend within Anthropic/OpenAI's account, but the "no raw credentials in sandbox" claim has this exception.
 
 ### Network policy
 
@@ -87,8 +89,8 @@ Key design principle: **security boundary is the sandbox, not per-action approva
 
 ### Wallet / credential lifecycle
 
-- **MUST** — The VPS's access to the upstream wallet (vendor TBD — see §7) uses a credential with bounded TTL (refreshed periodically), not a permanent token.
-- **MUST** — All derived secrets (SSH keys, GitHub tokens, cloud platform tokens) are refreshed daily.
+- **MUST** — The VPS's access to Infisical uses a credential with bounded TTL (refreshed periodically), not a permanent token.
+- **MUST** — All derived secrets (SSH keys, GitHub tokens, cloud platform tokens) are **re-minted** daily — old upstream token revoked, new one issued. A daily *re-fetch* of unchanged stored values would leave revocation latency unbounded and is not what's intended.
 - **SHOULD** — Default daily refresh interval = 24h. Can be tuned.
 - **COULD** — Sub-day rotation for the highest-value tokens if cheap to implement.
 
@@ -112,9 +114,9 @@ Defenses below are not equally load-bearing. To be honest about scope:
 
 | Defense | Passive supply chain | Active agent attack |
 |---|---|---|
-| Credential isolation (cred-daemon + daily refresh) | Strong | **Strong** |
+| Credential isolation (cred-daemon + daily re-mint) | Strong | Partial — bounds exfil-and-reuse; does NOT prevent in-session misuse via ssh-agent / CLIs |
 | Sandbox FS isolation from laptop | Strong | **Strong** |
-| Network egress restriction | Strong | **Strong** *(intentionally not used in v1 — see Network policy / Egress)* |
+| ~~Network egress restriction~~ *(not enforced in v1 — see Network policy / Egress)* | — | — |
 | `min-release-age` for package managers | Strong | Weak (agent can disable) |
 | Minimal sandbox image composition | Moderate | Weak (working package manager → agent can install more) |
 
@@ -170,7 +172,7 @@ Day-1 contents of the sandbox image:
 
 - **MUST** — Tailscale for private network (already in use; no public ingress to VPS).
 - **MUST** — Hetzner for compute (already in use; cost + good track record).
-- **MUST** — Wallet vendor: **Infisical (cloud, free tier)**. Universal Auth Machine Identity provides bounded-TTL access tokens (`accessTokenTTL` / `accessTokenMaxTTL`) with remote revoke endpoint. CLI is a single Go binary (not npm). SOC 2 / HIPAA / FIPS 140-3 compliant as of 2026. Open-source server available as a self-host escape valve if SaaS posture ever degrades. Free tier covers single-VPS use (5 machine identities cap, 3 projects).
+- **MUST** — Wallet vendor: **Infisical (cloud, free tier)**. Universal Auth Machine Identity provides bounded-TTL access tokens (`accessTokenTTL` / `accessTokenMaxTTL`) with remote revoke endpoint. CLI is a single Go binary (not npm). Open-source server available as a self-host escape valve if SaaS posture ever degrades. Free tier covers single-VPS use (5 machine identities cap, 3 projects).
 - **SHOULD** — Docker for the agent sandbox (well-understood, broad tooling).
 - **SHOULD** — Linux (Ubuntu LTS or NixOS), minimal base, scripted setup.
 
