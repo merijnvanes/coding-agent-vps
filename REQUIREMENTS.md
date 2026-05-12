@@ -17,9 +17,9 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 ### What we're defending against (all weighted equally)
 
-- **MUST** — Credential cascade (worm): agent reads creds from my environment, exfils them, attacker mass-publishes poisoned packages from my GitHub/npm accounts. *(Acknowledged residual: an active-attack agent can still **use** credentials in-session via ssh-agent / CLIs to push, publish, or deploy — even without seeing raw key material. Bounded by daily re-mint, not eliminated. Multi-project sharing — see §3 — means a compromise in one project's deps reaches all other projects' tokens.)*
+- **MUST** — Credential cascade (worm): agent reads creds from my environment, exfils them, attacker mass-publishes poisoned packages from my GitHub/npm accounts. *(Acknowledged residual: an active-attack agent can still **use** credentials in-session via ssh-agent / CLIs to push, publish, or deploy — even without seeing raw key material. Stolen credentials remain valid until manually revoked at each upstream service; user-set TTLs bound the worst case where the upstream supports them. Multi-project sharing — see §3 — means a compromise in one project's deps reaches all other projects' tokens.)*
 - **MUST** — Code / IP / data leakage: agent reads files it shouldn't (private repos, `.env`, client code) and exfils them. *(Acknowledged residual: under active agent compromise, whatever is currently mounted into the sandbox is reachable. Mitigated by keeping mounted scope minimal and recoverable from GitHub, not by trying to make the sandbox unreadable.)*
-- **MUST** — Identity hijack: stolen GitHub/npm creds used to push malicious commits as me, damaging reputation and downstream users. *(Acknowledged residual: the system bounds **duration** of hijack via daily re-mint, not **impact during the window**. No protected-branch enforcement or commit-signing requirement in v1.)*
+- **MUST** — Identity hijack: stolen GitHub/npm creds used to push malicious commits as me, damaging reputation and downstream users. *(Acknowledged residual: the system does not bound the impact of a hijack once authenticated. Duration is bounded by user-set TTLs at each upstream and by manual revocation. No protected-branch enforcement or commit-signing requirement in v1.)*
 - **MUST** — Runaway LLM / cloud bill: stolen API key racks up large charges before I notice.
 
 ### Attacker capability we're modeling
@@ -94,21 +94,21 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 ### Wallet / credential lifecycle
 
-- **MUST** — The VPS's access to Infisical uses a credential with bounded TTL (refreshed periodically), not a permanent token.
-- **MUST** — All derived secrets (SSH keys, GitHub tokens, cloud platform tokens) are **re-minted** daily — old upstream token revoked, new one issued. A daily *re-fetch* of unchanged stored values would leave revocation latency unbounded and is not what's intended.
-- **SHOULD** — Default daily refresh interval = 24h. Can be tuned.
-- **COULD** — Sub-day rotation for the highest-value tokens if cheap to implement.
+- **MUST** — The VPS's access to Infisical uses a credential with bounded TTL (Infisical Universal Auth access tokens), not a permanent token.
+- **MUST** — Credential values are stored in Infisical and fetched by the cred-daemon. The cred-daemon does not mint, rotate, or otherwise manage upstream credential lifecycles.
+- **SHOULD** — The cred-daemon refreshes its local cache from Infisical daily so user-initiated changes propagate within 24h without a sandbox restart.
+- **User responsibility (out of project scope)** — Setting expiration on credentials at each upstream service where supported, manually rotating values in Infisical when they expire or compromise is suspected, and revoking at each upstream during incident response. The project does not automate any upstream credential lifecycle.
 
 ### Revocation / killswitch
 
-- **MUST** — I can revoke the VPS's wallet access from outside the VPS via the wallet's admin interface.
-- **MUST (v1)** — Worst-case revocation latency ≤ 24h via the daily rotation locking out a revoked SA token. Plus immediate "kill the VPS from Hetzner panel" as a hard backstop.
+- **MUST** — I can revoke the VPS's access to Infisical from outside the VPS via Infisical's admin interface.
+- **MUST (v1)** — Revoking in Infisical causes the cred-daemon's next refresh to fail; the VPS can no longer fetch new credential values. Plus immediate "kill the VPS from Hetzner panel" as a hard backstop.
+- **User responsibility (out of project scope)** — During an incident, revoking each affected credential at its upstream service (GitHub, GCP, Cloudflare, Hetzner, npm, etc.). Stolen credentials remain valid until manually revoked upstream or until their TTL expires.
 
 ### Blast radius bounds
 
 - **MUST** — A fully compromised sandbox cannot read my laptop's files, SSH keys, browser cookies, or other personal credentials. (This is the entire point — laptop is no longer on the attack surface.)
 - **MUST** — A fully compromised sandbox cannot read the VPS's wallet credential (different user / process).
-- **SHOULD** — A fully compromised sandbox loses access to fresh secrets within 24h even without active revocation.
 
 ### Two threat classes — and which defenses actually hold
 
@@ -119,7 +119,7 @@ Defenses below are not equally load-bearing. To be honest about scope:
 
 | Defense | Passive supply chain | Active agent attack |
 |---|---|---|
-| Credential isolation (cred-daemon + daily re-mint) | Strong | Partial — bounds exfil-and-reuse; does NOT prevent in-session misuse via ssh-agent / CLIs |
+| Credential isolation (cred-daemon) | Strong | Partial — bounds exfil-and-reuse to upstream TTLs (user-managed); does NOT prevent in-session misuse via ssh-agent / CLIs |
 | Sandbox FS isolation from laptop | Strong | **Strong** |
 | ~~Network egress restriction~~ *(not enforced in v1 — see Network policy / Egress)* | — | — |
 | `min-release-age` for package managers | Strong | Weak (agent can disable) |

@@ -69,30 +69,25 @@ Three zones on the VPS, three trust levels.
 |---|---|---|
 | Tailscale daemon | host | Ingress (Tailscale-only, deny-all ACL) + outbound mesh |
 | Docker engine | host | Container runtime, configured for rootless |
-| cred-daemon | creds | Daily re-mint, socket server, alerting publisher |
+| cred-daemon | creds | Fetches credentials from Infisical (daily + on sandbox start), runs socket server, publishes alerts |
 | ssh-agent | creds | Signs git/ssh challenges originating in sandbox |
 | Git credential helper | creds | Vends GitHub HTTPS tokens to sandbox on socket request |
 | gcloud / hcloud / wrangler token helpers | creds | Vend cloud tokens on socket request |
 | Sandbox container | sandbox | Runs the agent + project work |
 | ntfy publisher | creds | Pushes alerts to phone (free tier of ntfy.sh) |
 
-## Daily re-mint flow
+## Daily refresh flow
 
-Cron at 04:00 in the creds zone, executed as `creds` user:
+Cron at 04:00 in the creds zone, executed as `creds` user. Also triggered on sandbox container startup.
 
 1. cred-daemon reads bootstrap secret from `/etc/agent-vps/infisical-uauth`
 2. Authenticates to Infisical Universal Auth → receives short-lived access token
-3. For each credential category, **re-mint upstream**:
-   - **GitHub**: create new fine-grained PAT via GitHub API, store in Infisical + locally, revoke previous PAT
-   - **GCP**: `gcloud iam service-accounts keys create` new key, store, then `keys delete` previous
-   - **Cloudflare**: API token rotation via Cloudflare API, similar pattern
-   - **Hetzner**: API token rotation via Hetzner Cloud API
-   - **SSH key**: generate new keypair, push public key to GitHub via API, revoke old SSH key from GitHub
-   - **npm / PyPI publish tokens** (static, no rotation API): re-fetch from Infisical only. *Residual: these don't truly rotate; revocation latency for them is bounded only by Infisical refresh, not upstream.*
-4. Write derived values to `/var/lib/agent-vps/creds/<name>` (mode 0600, owner `creds:creds`)
-5. Reload ssh-agent and credential helpers (they read from disk on each request, so usually a no-op signal)
-6. Sandbox container does NOT need restart — next socket request to a helper vends the new value
-7. On any failure: publish to ntfy topic
+3. Fetches current credential values from Infisical for each entry the daemon manages
+4. For each value that changed since last refresh: write to `/var/lib/agent-vps/creds/<name>` (mode 0600, owner `creds:creds`), reload the corresponding helper (e.g. `ssh-add -d <old>` + `ssh-add <new>` for SSH keys)
+5. Sandbox container does NOT need restart — next socket request to a helper vends the current value
+6. On Infisical authentication or fetch failure: publish to ntfy topic
+
+The cred-daemon does **not** mint, rotate, or otherwise call any upstream service's API. All credential lifecycle management at the upstream (GitHub, GCP, Cloudflare, Hetzner, npm, etc.) is the user's responsibility — see REQUIREMENTS.md §5. The cred-daemon's job is "keep the local cache in sync with Infisical."
 
 ## Rebuild flow
 
@@ -172,6 +167,7 @@ These are architecture-adjacent choices the design works with regardless. Decide
 
 Tracking back to REQUIREMENTS.md residuals and non-goals:
 
+- Does not mint, rotate, or otherwise manage upstream credentials. That is the user's responsibility — setting TTLs at each service where supported and manually updating values in Infisical (§5).
 - Does not prevent the agent from misusing credentials in-session once authenticated (§2 residual + §5 defense table: credential isolation is Partial against active misuse).
 - Does not isolate projects from each other (§3 + §8: cross-project leakage residual is accepted).
 - Does not filter outbound traffic from the sandbox (§5 + §8: parity with laptop).
