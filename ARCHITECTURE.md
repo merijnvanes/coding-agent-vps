@@ -98,10 +98,10 @@ There is no single "credential socket protocol." Each non-SSH CLI consumes crede
 | CLI | Where it reads creds | What cred-daemon writes |
 |---|---|---|
 | `git` (SSH) | `SSH_AUTH_SOCK` | ssh-agent socket — signing oracle, no raw key in sandbox |
-| `gcloud` | `~/.config/gcloud/application_default_credentials.json` | the SA key JSON (file) |
-| `wrangler` | `CLOUDFLARE_API_TOKEN` env var | env-export script the agent sources at startup |
-| `hcloud` | `HCLOUD_TOKEN` env var | env-export script |
-| `npm` (publish) | `~/.npmrc` `_authToken` | per-registry auth line (config file) |
+| `gcloud` | `~/.config/gcloud/application_default_credentials.json` | daemon writes to `/var/lib/agent-vps/agent-config/gcloud/application_default_credentials.json`; bind-mounted read-only into sandbox at the expected path |
+| `wrangler` | `CLOUDFLARE_API_TOKEN` env var | daemon writes `/var/lib/agent-vps/agent-config/env/cloudflare.sh`; container entrypoint sources it on shell start. Footgun: running shells keep stale value until re-source (see Daily refresh flow step 5) |
+| `hcloud` | `HCLOUD_TOKEN` env var (apps-only scope, no VPS-management) | daemon writes `/var/lib/agent-vps/agent-config/env/hetzner.sh`; same sourcing pattern as wrangler |
+| `npm` (publish) | `~/.npmrc` `_authToken` | daemon writes `/var/lib/agent-vps/agent-config/npm/npmrc`; bind-mounted read-only into sandbox as `~/.npmrc` |
 
 All of these except SSH put the raw bearer token somewhere the sandbox process can read at use-time. SSH via ssh-agent is the only true signing oracle (private key never enters the sandbox). For `git` operations we use SSH only; the agent does not have `gh` or any other GitHub API tooling in-sandbox — those operations happen from the laptop instead.
 
@@ -128,7 +128,7 @@ The cred-daemon does **not** mint, rotate, or otherwise call any upstream servic
 Triggered when the VPS is destroyed/compromised/lost:
 
 1. **Generate fresh Tailscale auth-key** from Tailscale admin UI (single-use, ≤24h TTL).
-2. **Provision**: `hcloud server create --without-ipv6 ...` with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker, cred-daemon source, applies the Hetzner Cloud firewall, configures ufw + IPv6-disable sysctls, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
+2. **Provision**: `hcloud server create --without-ipv6 --firewall=agent-vps-deny-all ...` (firewall pre-created, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), configures ufw + IPv6-disable sysctls, clones `https://github.com/merijnvanes/secure-agent-vps` to `/opt/agent-vps/`, builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral Tailscale key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
 3. **SSH in** from laptop via Tailscale.
 4. **Paste — Infisical Universal Auth client secret** into `/etc/agent-vps/infisical-uauth` (0600 creds:creds).
 5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`.
@@ -150,9 +150,17 @@ Triggered when the VPS is destroyed/compromised/lost:
   creds/                                       # raw key material — sandbox cannot see this
     gcp-sa-key.json        0600  creds:creds
     cloudflare-token       0600  creds:creds
-    hetzner-token          0600  creds:creds
+    hetzner-token          0600  creds:creds   # apps-only scope (no VPS-management)
     ssh-key                0600  creds:creds
     npm-token              0600  creds:creds
+  agent-config/                                # per-CLI config files; bind-mounted read-only into the sandbox
+    gcloud/
+      application_default_credentials.json  0644  creds:creds  # → /home/agent/.config/gcloud/...
+    npm/
+      npmrc                                 0644  creds:creds  # → /home/agent/.npmrc
+    env/
+      cloudflare.sh                         0644  creds:creds  # sourced by entrypoint → CLOUDFLARE_API_TOKEN
+      hetzner.sh                            0644  creds:creds  # sourced by entrypoint → HCLOUD_TOKEN (apps-only)
   sockets/                                     # mounted into sandbox; group-shared for rootless Docker subgid mapping
     ssh-agent.sock         0660  creds:agent-sockets
   sandbox-state/                               # named Docker volume — persists across container/image refresh
@@ -162,15 +170,21 @@ Triggered when the VPS is destroyed/compromised/lost:
 
 /srv/dev/projects/                merijn:merijn   # mounted rw into sandbox at /work
 
-/opt/agent-vps/                   root:root      # cred-daemon source (read-only at runtime)
+/opt/agent-vps/                   root:root      # cloned from https://github.com/merijnvanes/secure-agent-vps at cloud-init time
   daemon/                                       # systemd service unit + main loop (fetch from Infisical, serve sockets)
   integrations/                                 # per-CLI integration shims (write ADC file / env exports / config files)
   alerts/                                       # ntfy publisher
+  sandbox/
+    Dockerfile                                  # built on the VPS via `docker build` at cloud-init time
+    entrypoint.sh                               # container entrypoint: sources /run/agent-env/*.sh at shell start
 ```
 
 **Sandbox mounts (rootless Docker):**
-- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (the sandbox container's user is mapped via subgid to GID `agent-sockets` so it can `connect()` to the sockets, but cannot `unlink()` files in the dir)
-- `/var/lib/agent-vps/sandbox-state/` → `/home/agent/` and `/tmp/tmux-*` (named volume, rw, survives image refresh — preserves OAuth tokens and tmux session state)
+- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (sandbox user mapped via subgid to GID `agent-sockets` — can `connect()` to sockets, cannot `unlink()` files in the dir)
+- `/var/lib/agent-vps/agent-config/gcloud/` → `/home/agent/.config/gcloud/` (read-only)
+- `/var/lib/agent-vps/agent-config/npm/npmrc` → `/home/agent/.npmrc` (read-only)
+- `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; entrypoint sources `*.sh` on shell start to set env-var creds)
+- `/var/lib/agent-vps/sandbox-state/` → `/home/agent/.claude`, `/home/agent/.codex`, `/tmp/tmux-*` (named volume, rw — preserves OAuth tokens and tmux session state across container refresh)
 - `/srv/dev/projects/` → `/work` (rw)
 
 **Sandbox does NOT mount:** anything under `/etc/agent-vps/`, `/var/lib/agent-vps/creds/`, or `/opt/agent-vps/`.
@@ -194,7 +208,7 @@ These are architecture-adjacent choices the design works with regardless. Decide
 - **OS**: Ubuntu LTS (default — recommend for v1) vs NixOS (declarative rebuilds, more involved).
 - **cred-daemon language**: shell + jq (most transparent), Python (most maintainable), Go (single binary). Recommend shell + jq for v1.
 - **VPS provisioning**: hcloud CLI + bash script (recommend) vs Terraform (overkill for one box).
-- **Image update mechanism**: watchtower with a fixed window (e.g. 03:00, before 04:00 refresh) vs manual pulls.
+- **Image update cadence**: image is built on the VPS from the repo's Dockerfile (no registry). Rebuilds are user-triggered after Dockerfile changes (`git pull && docker build && docker compose up -d`). Could also be a daily cron pulling `main` and rebuilding if you want auto-updates. Watchtower doesn't apply since we don't pull from a registry.
 - **Production deploy detection for alerting**: poll cloud audit logs (recommend) vs webhook ingest (requires a public endpoint).
 
 ## What this architecture does NOT do

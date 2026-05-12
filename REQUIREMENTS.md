@@ -57,6 +57,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 - **MUST** — Source control: GitHub git operations via SSH key only (signing oracle — private key stays in the creds zone, no bearer token in sandbox).
 - **MUST** — Publishing: npm/PyPI/Docker Hub publish tokens.
 - **MUST** — Cloud infra & app platforms: Cloudflare, GCP, Hetzner — the platforms I actually deploy to. Corresponding CLIs (`wrangler`, `gcloud`, `hcloud`) baked into the sandbox image.
+- **MUST** — Agent's `HCLOUD_TOKEN` is **apps-only scope**: can manage deployed-app resources on Hetzner Cloud, cannot delete or modify the agent-vps server itself. VPS-level Hetzner administration uses a separate admin credential kept on the laptop, not in the sandbox. This preserves the "kill from Hetzner panel" backstop even if the agent is fully compromised.
 - **MUST** — LLM auth: Claude Max + Codex Pro subscriptions via interactive OAuth. OAuth is the only auth method that routes usage through subscription billing; API keys would bill against separate pay-per-use API accounts at significantly higher cost. The interactive bootstrap step (§6) and in-sandbox refresh-token residual (§5) are accepted as the price of subscription billing.
 - **WON'T (v1)** — Production database connection strings, signing keys, JWT secrets. Production app secrets live in the production environment (Vercel/Cloudflare env vars), not on the VPS. The agent triggers deploys via cloud-platform creds; the platform mounts secrets at runtime.
 - **WON'T (v1)** — Financial / payment APIs (Stripe etc.). Same logic: live in prod environment, not on VPS.
@@ -107,7 +108,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 ### Revocation / killswitch
 
 - **MUST** — I can revoke the VPS's access to Infisical from outside the VPS via Infisical's admin interface.
-- **MUST (v1)** — Revoking in Infisical causes the cred-daemon's next refresh to fail; the VPS can no longer fetch new credential values. Plus immediate "kill the VPS from Hetzner panel" as a hard backstop.
+- **MUST (v1)** — Revoking in Infisical causes the cred-daemon's next refresh to fail; the VPS can no longer fetch new credential values. Plus immediate "kill the VPS from Hetzner panel" as a hard backstop — the Hetzner panel uses a separate admin credential kept on the laptop (per §4), not the sandbox's apps-only `HCLOUD_TOKEN`, so the agent cannot prevent this backstop even if fully compromised.
 - **SHOULD** — A documented "scrub local cache" procedure exists for incidents: stop the cred-daemon, remove `/var/lib/agent-vps/creds/*`, stop the sandbox container. Revoking in Infisical alone does NOT invalidate values already cached on the VPS or already loaded into a running shell's env.
 - **User responsibility (out of project scope)** — During an incident, revoking each affected credential at its upstream service (GitHub, GCP, Cloudflare, Hetzner, npm, etc.) **and revoking Claude Code / Codex OAuth grants** at the Anthropic and OpenAI account dashboards. The OAuth refresh tokens persist in the sandbox `agent-state` volume and are NOT affected by revoking the VPS's Infisical access. Stolen credentials remain valid until manually revoked upstream or until their TTL expires.
 
