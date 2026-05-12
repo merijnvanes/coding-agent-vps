@@ -77,17 +77,13 @@ Three zones on the VPS, three trust levels.
 
 ## Firewall & IPv6
 
-Ingress is blocked at three deny-by-default layers, configured during cloud-init in this order:
+Ingress is blocked at three deny-by-default layers, configured during cloud-init in this order. Each layer's deny rules apply to **both IPv4 and IPv6**:
 
-1. **Hetzner Cloud firewall** — pre-created (e.g. `agent-vps-deny-all`) and attached to the VPS **at server-creation time** via `hcloud server create --firewall ...`. Denies all public-internet inbound before the VPS first boots — no exposure window during cloud-init.
-2. **`ufw` on the VPS** — same deny-all-inbound rule on the box itself; defense in depth (Hetzner firewall + host firewall together).
+1. **Hetzner Cloud firewall** — pre-created (e.g. `agent-vps-deny-all`, with explicit deny-all rules for both v4 and v6) and attached to the VPS **at server-creation time** via `hcloud server create --firewall ...`. Denies all public-internet inbound before the VPS first boots — no exposure window during cloud-init.
+2. **`ufw` on the VPS** — `ufw default deny incoming` covers both v4 and v6 with one setting; defense in depth (Hetzner firewall + host firewall together).
 3. **Tailscale ACL** — deny-by-default. Explicit allow: laptop → VPS (SSH and any other tailnet-only services). **NO rule allowing VPS → laptop in any direction** — a compromised VPS cannot reach laptop tailnet services (local dev servers, ssh-agent, etc.).
 
-**IPv6 is disabled** entirely on the VPS:
-- Cloud-init: `hcloud server create --without-ipv6`
-- Kernel sysctl: `net.ipv6.conf.all.disable_ipv6 = 1`, `net.ipv6.conf.default.disable_ipv6 = 1`
-- No ip6tables / ufw v6 rules to maintain
-- All outbound dependencies (GitHub, GCP, Cloudflare, Hetzner, npm, pypi, Anthropic, OpenAI, Infisical, Tailscale) support IPv4
+**IPv6 stays enabled** on the VPS (kernel and interface level). Disabling at the kernel was rejected because it causes silent failures for any service that binds to `::` and breaks IPv6-preferring DNS fallback for package mirrors. The security property we care about — "no public ingress" — is enforced at the firewall layers above, regardless of protocol.
 
 Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity).
 
@@ -128,7 +124,7 @@ The cred-daemon does **not** mint, rotate, or otherwise call any upstream servic
 Triggered when the VPS is destroyed/compromised/lost:
 
 1. **Generate fresh Tailscale auth-key** from Tailscale admin UI (single-use, ≤24h TTL).
-2. **Provision**: `hcloud server create --without-ipv6 --firewall=agent-vps-deny-all ...` (firewall pre-created, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), configures ufw + IPv6-disable sysctls, clones `https://github.com/merijnvanes/secure-agent-vps` to `/opt/agent-vps/`, builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral Tailscale key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
+2. **Provision**: `hcloud server create --firewall=agent-vps-deny-all ...` (firewall pre-created with v4+v6 deny-all inbound rules, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key. Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), enables ufw (`ufw default deny incoming` covers both v4 and v6), clones `https://github.com/merijnvanes/secure-agent-vps` to `/opt/agent-vps/`, builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Hetzner sees the ephemeral Tailscale key, which is acceptable — single-use + short TTL + Hetzner is in §2's trusted-dependency set.
 3. **SSH in** from laptop via Tailscale.
 4. **Paste — Infisical Universal Auth client secret** into `/etc/agent-vps/infisical-uauth` (0600 creds:creds).
 5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`.
