@@ -39,21 +39,28 @@ log()   { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
 alert() { "$ALERTS_SCRIPT" "$1" "$2" 2>/dev/null || log "WARN: alert script failed"; }
 die()   { log "FATAL: $*"; alert "cred-daemon" "FATAL: $*"; exit 1; }
 
-# Atomic write: temp file in same dir → fsync via mv. Mode 0644 by default,
-# pass an explicit mode as $2. Empty content is treated as "no value, skip
-# update" and the function returns 1 — callers use this to know whether to
-# fire follow-up actions (e.g. ssh-add reload after writing a new SSH key).
+# Atomic write: temp file in same dir → mv. Mode 0644 by default; pass an
+# explicit mode as $2. Empty content returns 1 (caller can skip follow-up).
+#
+# IMPORTANT: this function does NOT create or modify the parent directory's
+# mode. The caller is responsible for ensuring the directory exists with the
+# correct mode — top-level setup at the script start covers this. Without
+# that rule, writing ntfy-topic into the 0700 creds dir would flip it to a
+# laxer mode and open the boundary.
 atomic_write() {
   local dest="$1" mode="${2:-0644}" content="$3"
   [[ -z "$content" ]] && return 1
-  local dir tmp
-  dir=$(dirname "$dest")
-  install -d -m 0755 "$dir"   # daemon's umask + UID make ownership correct
+  local tmp
   tmp=$(mktemp "${dest}.XXXXXX")
   printf '%s' "$content" > "$tmp"
   chmod "$mode" "$tmp"
   mv -f "$tmp" "$dest"
 }
+
+# Safe shell-quote a value for inclusion in an env-export script. Uses
+# bash's printf %q which is robust for any payload (including single
+# quotes, newlines, etc.) when the consuming shell is bash.
+quote() { printf '%q' "$1"; }
 
 # Get one secret value by key from the in-memory $SECRETS_JSON.
 # Returns the value on stdout, exit code 0 even if the key is missing
@@ -98,8 +105,16 @@ trap 'rm -rf "$TMPDIR_CLEAN"' EXIT
 chmod 0700 "$TMPDIR_CLEAN"
 
 BODY_FILE="$TMPDIR_CLEAN/auth-body"
-printf '{"clientId":"%s","clientSecret":"%s"}' \
-  "$INFISICAL_CLIENT_ID" "$INFISICAL_CLIENT_SECRET" > "$BODY_FILE"
+# Build JSON via jq using environment variables (already-set by source-ing
+# the bootstrap file). This avoids:
+#   - putting secret on jq's argv (which would leak via /proc/<pid>/cmdline)
+#   - JSON-injection bugs from hand-formatted printf with values containing
+#     `"`, `\`, or newlines
+# The env vars are visible to jq via /proc/<jq-pid>/environ only; since
+# cred-daemon is the sole process running as the `creds` user and no other
+# user on the host can read that proc entry, this is acceptable.
+jq -n '{clientId: env.INFISICAL_CLIENT_ID, clientSecret: env.INFISICAL_CLIENT_SECRET}' \
+  > "$BODY_FILE"
 chmod 0600 "$BODY_FILE"
 
 log "authenticating to Infisical at $INFISICAL_URL"
@@ -109,8 +124,12 @@ AUTH_RESPONSE=$(curl -fsSL --max-time 30 \
   --data-binary "@$BODY_FILE" \
   ) || die "Infisical auth request failed (network or invalid credentials)"
 
-ACCESS_TOKEN=$(jq -r '.accessToken // empty' <<<"$AUTH_RESPONSE")
-[[ -n "$ACCESS_TOKEN" ]] || die "Infisical auth returned no accessToken"
+# Validate response shape upfront — parallels the secrets-response check.
+if ! jq -e '.accessToken | type == "string"' <<<"$AUTH_RESPONSE" >/dev/null 2>&1; then
+  die "Infisical auth response missing/invalid accessToken (API change or error body?)"
+fi
+ACCESS_TOKEN=$(jq -r '.accessToken' <<<"$AUTH_RESPONSE")
+[[ -n "$ACCESS_TOKEN" ]] || die "Infisical auth returned empty accessToken"
 
 # === 2. Fetch all secrets ===
 HEADER_FILE="$TMPDIR_CLEAN/auth-header"
@@ -174,16 +193,15 @@ fi
 # --- cloudflare-token (env-export, footgun: stale in running shells) ---
 if val=$(secret_value cloudflare-token) && [[ -n "$val" ]]; then
   log "writing cloudflare env-export"
-  # ' -> '\'' is shell-safe for any value
   atomic_write "$CONFIG_DIR/env/cloudflare.sh" 0644 \
-    "export CLOUDFLARE_API_TOKEN='${val//\'/\'\\\'\'}'"
+    "export CLOUDFLARE_API_TOKEN=$(quote "$val")"
 fi
 
 # --- hcloud-token (env-export, apps-scope) ---
 if val=$(secret_value hcloud-token) && [[ -n "$val" ]]; then
   log "writing hetzner env-export"
   atomic_write "$CONFIG_DIR/env/hetzner.sh" 0644 \
-    "export HCLOUD_TOKEN='${val//\'/\'\\\'\'}'"
+    "export HCLOUD_TOKEN=$(quote "$val")"
 fi
 
 # --- npm-token (.npmrc, file-read at each npm/pnpm invocation) ---
@@ -197,15 +215,16 @@ fi
 if val=$(secret_value pypi-token) && [[ -n "$val" ]]; then
   log "writing pypi env-export"
   atomic_write "$CONFIG_DIR/env/pypi.sh" 0644 \
-    "export UV_PUBLISH_TOKEN='${val//\'/\'\\\'\'}'"$'\n'"export TWINE_USERNAME='__token__'"$'\n'"export TWINE_PASSWORD='${val//\'/\'\\\'\'}'"
+"export UV_PUBLISH_TOKEN=$(quote "$val")
+export TWINE_USERNAME=__token__
+export TWINE_PASSWORD=$(quote "$val")"
 fi
 
-# --- docker-hub-token (env-export; consumed by docker login or build tooling) ---
-if val=$(secret_value docker-hub-token) && [[ -n "$val" ]]; then
-  log "writing docker-hub env-export"
-  atomic_write "$CONFIG_DIR/env/docker-hub.sh" 0644 \
-    "export DOCKER_HUB_TOKEN='${val//\'/\'\\\'\'}'"
-fi
+# Docker Hub publishing intentionally NOT scaffolded in v1:
+# the Docker CLI doesn't consume a single env var — `docker login` needs a
+# username + password pair, and pushing typically expects auth in ~/.docker/
+# config.json. Adding it cleanly requires a username secret too plus a
+# pre-exec login step. Defer until there's an actual publish workflow.
 
 # --- ntfy-topic (creds zone; only the alert script reads this) ---
 if val=$(secret_value ntfy-topic) && [[ -n "$val" ]]; then

@@ -78,15 +78,28 @@ RUN groupadd --gid 3000 agent-sockets \
     && mkdir -p /work \
     && chown agent:agent /work
 
-# --- entrypoint + profile.d sourcing of env-export files ---
+# --- entrypoint + env-export sourcing for ALL shell flavors ---
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY profile.d-agent-env.sh /etc/profile.d/agent-env.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /etc/profile.d/agent-env.sh
 
-# tmux runs a login shell by default for new windows (via default-command);
-# this ensures /etc/profile.d/agent-env.sh is re-sourced for each new window,
-# so rotated env-export values propagate without container restart.
+# Cover the three shell flavors so rotated env vars reach every entry point:
+#   - login interactive (e.g. tmux new window): /etc/profile + profile.d
+#   - non-login interactive (`docker exec -it sandbox bash`): /etc/bash.bashrc
+#   - non-interactive bash (`docker exec sandbox bash -c '...'`): BASH_ENV
+RUN printf '\n[ -r /etc/profile.d/agent-env.sh ] && . /etc/profile.d/agent-env.sh\n' \
+      >> /etc/bash.bashrc
+ENV BASH_ENV=/etc/profile.d/agent-env.sh
+
+# tmux: new windows use a bash login shell so /etc/profile.d/agent-env.sh
+# is re-sourced, picking up rotated env values without container restart.
 RUN printf 'set-option -g default-command "/bin/bash -l"\n' >> /etc/tmux.conf
+
+# Known limitation, documented for the user: `docker exec sandbox <binary>`
+# (running a binary directly, no shell) bypasses all of the above. The
+# command runs with the container's frozen entrypoint env. Use
+# `docker exec -it sandbox bash -lc '<cmd>'` to pick up fresh env-export
+# values, or attach to the tmux session.
 
 USER agent
 WORKDIR /work

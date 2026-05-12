@@ -10,8 +10,13 @@ Group=creds
 # it. Actual access to the socket file is gated by the socket's own mode
 # (0660) + the agent-sockets group, which the sandbox container is added to
 # via subgid mapping configured at cloud-init time.
-ExecStartPre=/usr/bin/install -d -m 0755 -o creds -g creds /var/lib/agent-vps/sockets
-# -a sets the socket path; ssh-agent creates the file as 0600 owned by creds:creds.
+# PRECONDITION (set up at cloud-init time):
+#   - groups: agent-sockets exists; creds user is a member
+#   - directories: /var/lib/agent-vps/{,sockets} exist, owned by creds
+# Running as User=creds: chgrp to a group we're a member of is permitted
+# without CAP_CHOWN; install -d defaults to caller's uid/gid.
+ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
+# -a sets the socket path; ssh-agent creates the file 0600 owned by creds:creds.
 ExecStart=/usr/bin/ssh-agent -a /var/lib/agent-vps/sockets/ssh-agent.sock
 # Hand the socket over to the agent-sockets group with 0660 so the sandbox
 # (via subgid-mapped membership) can connect() but cannot unlink().
