@@ -1,0 +1,48 @@
+#cloud-config
+# coding-agent-vps cloud-init
+#
+# Minimal entrypoint: install Tailscale, join the tailnet via the auth-key
+# (substituted by scripts/provision.sh before this file is sent to Hetzner),
+# clone the repo, then hand off to scripts/cloud-init-tasks.sh for the rest.
+#
+# The auth-key in user-data is the only secret Hetzner sees. It's single-use
+# with a short TTL (generated fresh per provision) — acceptable since Hetzner
+# is in the trusted-dependency set (REQUIREMENTS.md §2).
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - bash
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - openssh-client
+  - openssh-server
+  - openssl
+  - sudo
+  - tmux
+  - ufw
+  - uidmap
+
+runcmd:
+  # 1. UFW: deny incoming on every interface except tailscale0. Hetzner Cloud
+  #    firewall is already deny-all from server creation (attached via
+  #    --firewall flag in provision.sh) — this is defense in depth.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow in on tailscale0
+  - ufw --force enable
+
+  # 2. Tailscale: install and join. --ssh enables Tailscale SSH (no
+  #    authorized_keys management needed; auth via tailnet identity).
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --auth-key=__TAILSCALE_AUTH_KEY__ --hostname=coding-agent-vps --ssh --accept-routes
+
+  # 3. Clone the repo and run the host-setup script.
+  - mkdir -p /opt/agent-vps
+  - git clone https://github.com/merijnvanes/coding-agent-vps /opt/agent-vps
+  - bash /opt/agent-vps/scripts/cloud-init-tasks.sh
+
+final_message: "Cloud-init complete. SSH in via Tailscale and run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"
