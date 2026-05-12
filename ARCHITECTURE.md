@@ -35,7 +35,7 @@ Concrete component layout and data flows for the system specified in [REQUIREMEN
             │ HTTPS                    │ HTTPS (unrestricted egress)
             ▼                          ▼
        Infisical                  GitHub · GCP · Cloudflare · Hetzner
-       (daily re-mint)            npm · pypi · Anthropic · OpenAI · …
+       (daily fetch)              npm · pypi · Anthropic · OpenAI · …
 ```
 
 ## Trust zones
@@ -51,7 +51,7 @@ Three zones on the VPS, three trust levels.
 ### Creds zone (user `creds`)
 
 - **Owns**: cred-daemon (systemd service), Infisical Universal Auth bootstrap secret, daily-refreshed derived secrets, ssh-agent process, credential-helper sockets
-- **Talks to outside**: HTTPS to Infisical and each upstream API (GitHub, GCP, Cloudflare, Hetzner) for re-mint
+- **Talks to outside**: HTTPS to Infisical only (to fetch credential values). Does not call upstream APIs — credential lifecycle at the upstream is the user's responsibility per REQUIREMENTS.md §5.
 - **Talks to sandbox**: only via unix sockets that vend signatures/tokens on demand — never raw key material
 - **Trust**: highest — holds everything sensitive
 
@@ -79,9 +79,9 @@ Three zones on the VPS, three trust levels.
 
 Ingress is blocked at three deny-by-default layers, configured during cloud-init in this order:
 
-1. **Hetzner Cloud firewall** attached to the VPS — denies all public-internet inbound IPv4.
+1. **Hetzner Cloud firewall** — pre-created (e.g. `agent-vps-deny-all`) and attached to the VPS **at server-creation time** via `hcloud server create --firewall ...`. Denies all public-internet inbound before the VPS first boots — no exposure window during cloud-init.
 2. **`ufw` on the VPS** — same deny-all-inbound rule on the box itself; defense in depth (Hetzner firewall + host firewall together).
-3. **Tailscale ACL** — deny-by-default, then explicit allow rules for tags applied to my own tailnet nodes.
+3. **Tailscale ACL** — deny-by-default. Explicit allow: laptop → VPS (SSH and any other tailnet-only services). **NO rule allowing VPS → laptop in any direction** — a compromised VPS cannot reach laptop tailnet services (local dev servers, ssh-agent, etc.).
 
 **IPv6 is disabled** entirely on the VPS:
 - Cloud-init: `hcloud server create --without-ipv6`
@@ -113,12 +113,17 @@ Cron at 04:00 in the creds zone, executed as `creds` user. Also triggered on san
 2. Authenticates to Infisical Universal Auth → receives short-lived access token
 3. Fetches current credential values from Infisical for each entry the daemon manages
 4. For each value that changed since last refresh: write to `/var/lib/agent-vps/creds/<name>` (mode 0600, owner `creds:creds`), reload the corresponding helper (e.g. `ssh-add -d <old>` + `ssh-add <new>` for SSH keys)
-5. Sandbox container does NOT need restart — next socket request to a helper vends the current value
+5. Propagation to the sandbox depends on the credential type:
+   - **SSH** (socket-served): next signing request sees the new key — no restart needed.
+   - **gcloud ADC, `~/.npmrc`** (file-read at each use): next CLI invocation reads the new value — no restart needed.
+   - **`CLOUDFLARE_API_TOKEN`, `HCLOUD_TOKEN`** (env vars sourced at shell start): running tmux sessions keep stale values until the shell re-sources its env-export or is restarted. Document this as a known footgun; users should `exec $SHELL` or detach/reattach tmux after a known rotation.
 6. On Infisical authentication or fetch failure: publish to ntfy topic
 
 The cred-daemon does **not** mint, rotate, or otherwise call any upstream service's API. All credential lifecycle management at the upstream (GitHub, GCP, Cloudflare, Hetzner, npm, etc.) is the user's responsibility — see REQUIREMENTS.md §5. The cred-daemon's job is "keep the local cache in sync with Infisical."
 
 ## Rebuild flow
+
+**Scope note**: this is the *full VPS rebuild* flow (destroy server → recreate). For container-only refresh (watchtower image update, `docker compose up -d` after a Dockerfile change), the named volume `sandbox-state` persists, so OAuth tokens and tmux state survive — no OAuth re-login needed. Full VPS rebuild loses the volume (no backups in v1 — see REQUIREMENTS.md §6) and requires re-OAuth.
 
 Triggered when the VPS is destroyed/compromised/lost:
 
@@ -150,7 +155,6 @@ Triggered when the VPS is destroyed/compromised/lost:
     npm-token              0600  creds:creds
   sockets/                                     # mounted into sandbox; group-shared for rootless Docker subgid mapping
     ssh-agent.sock         0660  creds:agent-sockets
-    git-helper.sock        0660  creds:agent-sockets
   sandbox-state/                               # named Docker volume — persists across container/image refresh
     home-claude/                               # /home/agent/.claude (OAuth refresh tokens)
     home-codex/                                # /home/agent/.codex (OAuth refresh tokens)
@@ -177,8 +181,7 @@ ntfy.sh free tier. cred-daemon publishes to a private topic; phone subscribes vi
 
 Events that trigger an alert:
 
-- Infisical refresh failure (any reason)
-- Upstream re-mint failure (any of GitHub / GCP / Cloudflare / Hetzner)
+- Infisical fetch failure (any reason — e.g. revoked machine identity, network issue, malformed response)
 - Production deploy detected (poll GCP/Cloudflare audit logs in cred-daemon's cron)
 - LLM rate-limit hit (tail Claude/Codex stderr for known error patterns)
 

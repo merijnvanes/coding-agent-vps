@@ -74,8 +74,9 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 - **MUST** — Agent runs inside an OS-level sandbox (container or equivalent) on the VPS.
 - **MUST** — Sandbox runs under rootless Docker (or equivalent: Docker with user-namespace remapping, Podman rootless). Default rootful Docker is disallowed — it maps container-root to host-root and negates the "separate user / namespace" boundary.
-- **MUST** — Sandbox cannot read raw credential files. Keys live in a separate user / namespace.
-- **MUST** — Sandbox accesses credentials via narrow local interfaces (ssh-agent socket, credential helper) — never as raw key material.
+- **MUST** — Raw credential files at rest live in the creds zone (`/var/lib/agent-vps/creds/`, mode 0600, owned by the `creds` user) — the sandbox cannot read them directly.
+- **MUST** — SSH credentials use the ssh-agent socket as a signing oracle — the SSH private key never enters the sandbox process space.
+- **Acknowledged** — Non-SSH credentials (gcloud SA key JSON, `CLOUDFLARE_API_TOKEN` / `HCLOUD_TOKEN` env vars, npm `_authToken`) are delivered into the sandbox at use-time and are readable by the sandbox process. The creds zone protects them *at rest*, not *at use-time inside the sandbox*. Only SSH is a true signing oracle.
 - **MUST** — The Infisical Universal Auth bootstrap secret is stored in a path readable only by the cred-daemon's user (e.g. `/etc/agent-vps/infisical-uauth`, mode 0600, owned by the `creds` user). The sandbox container has no mount or read access to this path.
 - **Acknowledged** — Claude Code / Codex OAuth refresh tokens live inside the sandbox by necessity (the agent CLI needs them). The agent process can read its own auth state. Impact is bounded to LLM API spend within Anthropic/OpenAI's account, but the "no raw credentials in sandbox" claim has this exception.
 
@@ -90,6 +91,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 - **MUST** — VPS firewall blocks all incoming ports from the public internet. Only Tailscale traffic is permitted in. SSH, any agent endpoints, anything else are reachable only via tailnet.
 - **MUST** — Tailscale ACL is deny-by-default: only my own tailnet nodes can reach the VPS.
 - **MUST** — IPv6 is disabled on the VPS. All services we depend on support IPv4; disabling IPv6 eliminates a parallel attack surface and simplifies firewall configuration.
+- **MUST** — Tailscale ACL also denies VPS → laptop traffic. The compromised-VPS scenario cannot initiate connections to laptop tailnet services. (Laptop-initiated SSH to the VPS is connection-tracked and unaffected.)
 
 **Egress (outgoing):**
 
@@ -106,7 +108,8 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 
 - **MUST** — I can revoke the VPS's access to Infisical from outside the VPS via Infisical's admin interface.
 - **MUST (v1)** — Revoking in Infisical causes the cred-daemon's next refresh to fail; the VPS can no longer fetch new credential values. Plus immediate "kill the VPS from Hetzner panel" as a hard backstop.
-- **User responsibility (out of project scope)** — During an incident, revoking each affected credential at its upstream service (GitHub, GCP, Cloudflare, Hetzner, npm, etc.). Stolen credentials remain valid until manually revoked upstream or until their TTL expires.
+- **SHOULD** — A documented "scrub local cache" procedure exists for incidents: stop the cred-daemon, remove `/var/lib/agent-vps/creds/*`, stop the sandbox container. Revoking in Infisical alone does NOT invalidate values already cached on the VPS or already loaded into a running shell's env.
+- **User responsibility (out of project scope)** — During an incident, revoking each affected credential at its upstream service (GitHub, GCP, Cloudflare, Hetzner, npm, etc.) **and revoking Claude Code / Codex OAuth grants** at the Anthropic and OpenAI account dashboards. The OAuth refresh tokens persist in the sandbox `agent-state` volume and are NOT affected by revoking the VPS's Infisical access. Stolen credentials remain valid until manually revoked upstream or until their TTL expires.
 
 ### Blast radius bounds
 
@@ -188,7 +191,7 @@ Day-1 contents of the sandbox image:
 
 ### Architectural preferences
 
-- **MUST** — One unifying pattern, not three mechanisms per problem. The agent talks to local interfaces; the wallet zone holds raw secrets; one daily refresh cron handles all rotation.
+- **MUST** — One unifying pattern, not three mechanisms per problem. The agent talks to local interfaces; the creds zone holds raw secrets; one daily fetch from Infisical keeps the local cache in sync.
 - **MUST** — Prefer off-the-shelf proven components over custom code where they exist; custom code is small glue scripts only.
 - **SHOULD** — Simpler is better, even at some cost in theoretical optimum.
 - **WON'T (v1)** — GitHub Apps with token brokers, HashiCorp Vault, custom egress proxies. Reachable for if a real need surfaces.
