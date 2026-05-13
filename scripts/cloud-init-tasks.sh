@@ -5,12 +5,12 @@
 # bootstrap.sh's job, run manually after the user SSHes in.
 #
 # What this does, in order:
-#   1. Create creds + merijn users
+#   1. Create creds + dev users
 #   2. Pre-create the on-disk directory tree with correct ownership/modes
-#   3. Configure subuid/subgid for merijn (default range only — the
+#   3. Configure subuid/subgid for dev (default range only — the
 #      previous agent-sockets-group + custom subgid trick was dropped in
 #      favor of a 0666 ssh-agent socket; see daemon/ssh-agent-creds.service)
-#   4. Install Docker, disable the rootful daemon, set up rootless for merijn
+#   4. Install Docker, disable the rootful daemon, set up rootless for dev
 #   5. Build the sandbox image (no registry — built locally)
 #   6. Install + enable systemd units
 #   7. Print next-step instructions
@@ -31,17 +31,17 @@ id -u creds >/dev/null 2>&1 \
        --shell /usr/sbin/nologin \
        creds
 
-# merijn: human SSH user. Tailscale SSH authenticates via tailnet identity
+# dev: human SSH user. Tailscale SSH authenticates via tailnet identity
 # (no authorized_keys management). Sudo for admin tasks.
-id -u merijn >/dev/null 2>&1 \
+id -u dev >/dev/null 2>&1 \
   || useradd \
        --create-home \
        --shell /bin/bash \
        --groups sudo \
-       merijn
+       dev
 
-# Passwordless sudo for merijn (Tailscale SSH is the auth gate)
-install -m 0440 /dev/stdin /etc/sudoers.d/merijn <<<'merijn ALL=(ALL) NOPASSWD:ALL'
+# Passwordless sudo for dev (Tailscale SSH is the auth gate)
+install -m 0440 /dev/stdin /etc/sudoers.d/dev <<<'dev ALL=(ALL) NOPASSWD:ALL'
 
 # === 2. Directory tree ===
 
@@ -62,17 +62,17 @@ install -m 0644 -o creds -g creds /dev/null /var/lib/agent-vps/agent-config/npm/
 
 # Project workspace. Mode 0777 so the rootless-Docker-mapped sandbox UID
 # (host UID merijn_subuid_base + 999) can write here in addition to host
-# merijn. On this single-user box the practical access set is unchanged
-# (only merijn and rootless containers ever access this dir).
-install -d -m 0777 -o merijn -g merijn /srv/dev
-install -d -m 0777 -o merijn -g merijn /srv/dev/projects
+# dev. On this single-user box the practical access set is unchanged
+# (only dev and rootless containers ever access this dir).
+install -d -m 0777 -o dev -g dev /srv/dev
+install -d -m 0777 -o dev -g dev /srv/dev/projects
 
 # === 3. subuid / subgid for rootless Docker ===
 # Default range — required by dockerd-rootless-setuptool.sh below. No custom
 # GID mapping needed any more (the agent-sockets-group approach was dropped
 # in favor of a 0666 ssh-agent socket; see daemon/ssh-agent-creds.service).
-grep -q '^merijn:100000:' /etc/subuid || echo "merijn:100000:65536" >> /etc/subuid
-grep -q '^merijn:100000:' /etc/subgid || echo "merijn:100000:65536" >> /etc/subgid
+grep -q '^dev:100000:' /etc/subuid || echo "dev:100000:65536" >> /etc/subuid
+grep -q '^dev:100000:' /etc/subgid || echo "dev:100000:65536" >> /etc/subgid
 
 # === 4. Docker + rootless setup ===
 
@@ -84,15 +84,15 @@ fi
 # We use rootless Docker; disable the rootful daemon.
 systemctl disable --now docker.service docker.socket 2>/dev/null || true
 
-# Allow merijn's user systemd units to run without an active login session.
-loginctl enable-linger merijn
+# Allow dev's user systemd units to run without an active login session.
+loginctl enable-linger dev
 
-# Start merijn's user systemd manager NOW (linger only takes effect on the
+# Start dev's user systemd manager NOW (linger only takes effect on the
 # next boot; we need it in this boot too). Without this,
 # dockerd-rootless-setuptool.sh detects no systemd, falls back to "manual
 # mode" without installing the docker.service user unit, and the next
 # `systemctl --user enable --now docker` fails.
-MERIJN_UID=$(id -u merijn)
+MERIJN_UID=$(id -u dev)
 systemctl start "user@${MERIJN_UID}.service"
 # Wait for the user systemd private socket to appear (up to 30s).
 for _ in $(seq 1 30); do
@@ -100,19 +100,19 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 [[ -S "/run/user/${MERIJN_UID}/systemd/private" ]] \
-  || { log "ERROR: merijn user systemd did not start within 30s"; exit 1; }
+  || { log "ERROR: dev user systemd did not start within 30s"; exit 1; }
 
-# Configure rootless Docker for merijn (idempotent: re-running is harmless).
-log "configuring rootless Docker for merijn"
-sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \
+# Configure rootless Docker for dev (idempotent: re-running is harmless).
+log "configuring rootless Docker for dev"
+sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
   bash -lc 'dockerd-rootless-setuptool.sh install --force 2>/dev/null || dockerd-rootless-setuptool.sh install'
 
-sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \
+sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
   bash -lc 'systemctl --user enable --now docker'
 
 # === 5. Build the sandbox image ===
 log "building sandbox image (~5–10 min on a CX23)"
-sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \
+sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
   bash -lc 'cd /opt/agent-vps && docker build -t coding-agent-vps/sandbox:latest ./sandbox'
 
 # === 6. systemd units ===

@@ -172,7 +172,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
     ssh-agent.sock         0666  creds:creds   # raw ssh-agent — cred-daemon uses this directly
     ssh-agent-bridge.sock  0666  creds:creds   # socat relay — sandbox uses this (UID-namespace bridge)
 
-/srv/dev/projects/                merijn:merijn   # mounted rw into sandbox at /work
+/srv/dev/projects/                dev:dev   # mounted rw into sandbox at /work
 
 /opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time
   daemon/                                       # cred-daemon, ssh-agent-creds, ssh-agent-bridge units

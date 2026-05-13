@@ -13,8 +13,8 @@ Group=creds
 # PRECONDITION (set up at cloud-init time):
 #   - directories: /var/lib/agent-vps/{,sockets} exist
 # Socket mode 0666 — every local process that can traverse the sockets dir
-# can connect(). On this host the local process set is {root, creds, merijn,
-# rootless-Docker-mapped UIDs from merijn's subuid range}, all of which are
+# can connect(). On this host the local process set is {root, creds, dev,
+# rootless-Docker-mapped UIDs from dev's subuid range}, all of which are
 # trusted by the design. Group-gated 0660 would require a custom user-
 # namespace mapping that rootless Docker doesn't cleanly expose; the practical
 # access set is identical. Documented as accepted residual.

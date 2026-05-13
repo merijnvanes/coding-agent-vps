@@ -132,26 +132,34 @@ If anything is missing, pause and have them sign up first.
 
 ## Choose the user's shell username
 
-Default username on the VPS is `merijn` (cosmetic — it's what they SSH
-in as). They can pick any other valid Linux username.
+Default username on the VPS is `dev` (the human who SSHes in — distinct
+from `creds`, the credential daemon, and `agent`, the user inside the
+container). It's cosmetic and trivially renamed.
 
 Ask the user: "What username do you want for SSH login to the VPS?
-(default: `merijn`)"
+(default: `dev`)"
 
-If anything other than `merijn`, do a repo-wide replace before running
+If anything other than `dev`, do a repo-wide replace before running
 provision.sh:
 
 ```bash
 NEW_USER="<their-choice>"
-# All files that reference the username (excluding docs and git history).
-# Uses perl rather than sed because GNU sed's `\b` word-boundary is not
-# portable to macOS BSD sed (it would silently match nothing).
-git grep -l '\bmerijn\b' | grep -v '^docs/' | xargs perl -i -pe "s/\bmerijn\b/$NEW_USER/g"
-git diff --stat            # show them what changed
+# Rename the username, BUT skip occurrences inside paths like /dev/null
+# (kernel device tree) or words like "develop" / "device". The lookarounds
+# require non-word, non-slash on both sides so `dev` only matches when it
+# appears as a complete shell token.
+git grep -l '\bdev\b' \
+  | grep -v -e '^docs/' -e '^README.md$' -e '^SECURITY.md$' \
+  | xargs perl -i -pe 's{(?<![/\w])dev(?![/\w])}{$ENV{NEW_USER}}g'
+
+# IMPORTANT: review the diff before committing — the pattern is careful
+# but not infallible. Look for any unintended /dev/ paths or "develop*"
+# strings that got rewritten and revert them.
+NEW_USER="$NEW_USER" git diff
 ```
 
-Confirm with the user before continuing. The change isn't committed
-yet — they can review.
+Confirm with the user that the diff looks right (only username-shaped
+occurrences changed) before continuing. The change isn't committed yet.
 
 ## Phase 1: Hetzner Cloud (~5 min)
 

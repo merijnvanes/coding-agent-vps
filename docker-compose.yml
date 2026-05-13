@@ -1,6 +1,6 @@
 # docker-compose.yml — sandbox container spec
 #
-# Runs under rootless Docker as user `merijn` (the human SSH user).
+# Runs under rootless Docker as user `dev` (the human SSH user).
 # Mounts the per-CLI credential files (read-only) and the project working tree.
 #
 # OAuth refresh tokens (~/.claude, ~/.codex) live in named volumes that

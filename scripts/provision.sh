@@ -186,7 +186,7 @@ echo "  hcloud server status $SERVER_NAME"
 echo "  tailscale status   # the server will appear when it joins the tailnet"
 echo
 echo "Once it shows in your tailnet, SSH in:"
-echo "  ssh merijn@coding-agent-vps   # uses Tailscale SSH; no keys to manage"
+echo "  ssh dev@coding-agent-vps   # uses Tailscale SSH; no keys to manage"
 echo
 echo "Then:"
 echo "  sudo bash /opt/agent-vps/scripts/bootstrap.sh"

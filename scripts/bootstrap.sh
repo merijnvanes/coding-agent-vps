@@ -63,10 +63,10 @@ fi
 echo
 echo "=== Done ==="
 echo
-echo "Next steps (as the merijn user):"
+echo "Next steps (as the dev user):"
 echo
-echo "  sudo -u merijn -H bash -lc 'cd /opt/agent-vps && docker compose up -d'"
-echo "  sudo -u merijn -H bash -lc 'docker exec -it sandbox tmux attach -t main'"
+echo "  sudo -u dev -H bash -lc 'cd /opt/agent-vps && docker compose up -d'"
+echo "  sudo -u dev -H bash -lc 'docker exec -it sandbox tmux attach -t main'"
 echo
 echo "Inside the tmux session, log in to your AI subscriptions interactively:"
 echo "  claude login"
