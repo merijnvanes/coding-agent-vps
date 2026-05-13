@@ -84,4 +84,4 @@ Then run `claude` or `codex` inside the sandbox. Your workspace is
 
 ## License
 
-(none yet — add before publishing)
+[Unlicense](./LICENSE) — public domain dedication. Do whatever you want.
