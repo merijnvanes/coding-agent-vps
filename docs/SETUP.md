@@ -278,56 +278,69 @@ Phase 6.
 
 ## Phase 3: Tailscale (~5 min)
 
-**Goal.** ACL that (a) lets the user's laptop reach the VPS, (b) blocks
-the reverse direction (VPS cannot initiate connections back to the
-laptop or other tailnet devices), plus a Tailscale SSH policy and an
-auth-key generated with the tag ticked.
+**Goal.** Configure the user's Tailscale ACL so the VPS can join the
+tailnet under `tag:coding-agent-vps`, the user's laptop can SSH into
+it as the chosen user, and — implicitly or explicitly — the VPS
+cannot initiate connections back to the laptop or other tailnet
+devices. Plus generate an auth-key with the tag ticked.
 
-The reverse-direction block is what bounds the agent's blast radius —
-a compromised sandbox cannot port-scan the user's laptop or pivot to
-other devices on their tailnet.
+The asymmetric reachability bounds the agent's blast radius — a
+compromised sandbox cannot pivot to the user's laptop or other
+tailnet devices.
+
+### Background: how Tailscale enforces the asymmetry
+
+Tailscale ACLs have two independent gates:
+
+- The **`ssh` block** controls Tailscale SSH (`tailscale up --ssh` on
+  the destination, plus `ssh <user>@host` from the source). The VPS
+  is provisioned with `--ssh` enabled, so all our SSH usage routes
+  through Tailscale SSH — not raw TCP.
+- The **`acls` block** controls raw TCP/UDP between devices (e.g.,
+  `curl http://hostname:8080/`). Our setup doesn't need any of this
+  — every interaction with the VPS goes through the SSH tunnel.
+
+A Tailscale ACL file with **no `acls` block** denies ALL inter-device
+network traffic. That's the strictest possible setting for the
+asymmetry we want — and it's perfectly compatible with Tailscale SSH
+via the `ssh` block. Most users land here naturally.
+
+If the ACL DOES have an `acls` block (custom tailnet, or you want raw
+TCP for some reason), make sure no rule has the VPS as a source.
 
 ### Manual steps (have the user do these)
 
 Open https://login.tailscale.com/admin/acls/file. The user's existing
-ACL is one of two shapes:
+ACL is one of three shapes:
 
-- **Default Tailscale ACL** for new tailnets: a single rule
-  `{"action":"accept","src":["*"],"dst":["*:*"]}` — allow everything.
-  This rule MUST go (otherwise the VPS→laptop direction stays open
-  and the explicit rule below is shadowed).
-- **Customized ACL** with multiple rules: confirm there is no rule
-  whose `src` would include the VPS. Patterns to watch for:
-  `["*"]`, `["tag:coding-agent-vps"]`, `["autogroup:tagged"]` (matches
-  every tagged device including this one), or any group/IP set that
-  the VPS belongs to. Any of these would let traffic flow *from* the
-  VPS and defeat the asymmetry.
+1. **Default Tailscale ACL** (new tailnets): a catch-all
+   `{"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}`.
+   This MUST go (or be narrowed) — the catch-all would let VPS→laptop
+   traffic flow. The simplest replacement is to drop the `acls`
+   section entirely and rely on Tailscale SSH (block below).
+2. **Customized ACL** without an `acls` section: rely on Tailscale
+   SSH for our access (no `acls` changes needed — see the optional
+   block below).
+3. **Customized ACL** with an `acls` block: confirm no rule has
+   `src: ["*"]`, `src: ["tag:coding-agent-vps"]`, or
+   `src: ["autogroup:tagged"]` (which matches every tagged device,
+   including this one). Any of those would let VPS→laptop traffic
+   flow and defeat the asymmetry.
 
-Have the user MERGE these blocks into their ACL (replacing any
-catch-all `*→*` rule):
+Have the user MERGE the following blocks into their existing ACL —
+**add sibling keys, don't overwrite** existing `tagOwners`/`ssh`/`acls`
+entries that govern their other tailnet devices:
 
 ```jsonc
 {
-  // Network ACL: laptop can reach the VPS; VPS cannot reach the laptop
-  // (no rule with src: tag:coding-agent-vps, on purpose).
-  "acls": [
-    {
-      "action": "accept",
-      "src":    ["autogroup:member"],
-      "dst":    ["tag:coding-agent-vps:*"]
-    }
-  ],
-
+  // Required: declare the agent VPS tag.
   "tagOwners": {
     "tag:coding-agent-vps": ["autogroup:admin"]
   },
 
-  // Tailscale SSH is gated independently of the network ACL above.
-  // `users` lists exactly which SSH user the connecting member is
-  // allowed to log in as on the VPS — keep it tight: just the one
-  // username from earlier. (Tailscale's own docs warn against pairing
-  // `autogroup:nonroot` with a tagged dst — it lets the source SSH as
-  // any non-root user on that host.)
+  // Required: Tailscale SSH access — only as the chosen username,
+  // no `autogroup:nonroot` (Tailscale's own docs warn that pairing
+  // it with a tagged dst lets the source SSH as ANY non-root user).
   "ssh": [
     {
       "action": "accept",
@@ -336,12 +349,23 @@ catch-all `*→*` rule):
       "users":  ["<USER>"]
     }
   ]
+
+  // Optional — only needed if the user wants raw TCP/UDP from
+  // laptop to VPS (port-forwarded services beyond SSH, e.g. a dev
+  // server on coding-agent-vps:8000). Without this, only Tailscale
+  // SSH works — which covers the documented setup steps.
+  // ,
+  // "acls": [
+  //   {
+  //     "action": "accept",
+  //     "src":    ["autogroup:member"],
+  //     "dst":    ["tag:coding-agent-vps:*"]
+  //   }
+  // ]
 }
 ```
 
-(Substitute `<USER>` with the username chosen earlier. If they already
-have `acls`/`tagOwners`/`ssh` blocks for other devices, merge sibling
-entries into them rather than overwriting.)
+(Substitute `<USER>` with the username chosen earlier.)
 
 > **Critical — this is the single most-missed step:** when generating
 > the auth-key in the next step, the user MUST tick
