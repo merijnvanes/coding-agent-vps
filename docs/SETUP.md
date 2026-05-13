@@ -229,9 +229,9 @@ required secrets populated.
 
 ### Manual steps (have the user do these)
 
-1. Sign in at https://infisical.com. Note which region URL they land
-   on — `us.infisical.com` or `eu.infisical.com` (`app.infisical.com`
-   also works as an alias). You need this for the bootstrap step.
+1. Sign in at https://infisical.com. Note the URL they land on
+   (typically `app.infisical.com`, but EU-region accounts land on
+   `eu.infisical.com` directly — that's the URL to use for bootstrap).
 2. Create a project named `coding-agent-vps`.
 3. Note the **Project ID** from Project → Settings → General (or the
    UUID in the project URL).
@@ -279,7 +279,7 @@ session). Just confirm with them that they have each item recorded:
 
 - Infisical project ID
 - Environment slug (lowercase, e.g. `dev`)
-- Infisical URL (which region — `us.infisical.com`, `eu.infisical.com`, or `app.infisical.com`)
+- Infisical URL (the URL their browser is on — `app.infisical.com` by default, `eu.infisical.com` for EU-region accounts)
 - Universal Auth Client ID (UUID)
 - Universal Auth Client Secret (shown once at creation)
 

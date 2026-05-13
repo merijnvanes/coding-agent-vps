@@ -23,7 +23,7 @@ echo "=== coding-agent-vps bootstrap ==="
 echo
 PROJECT_ID=$(ask     "Infisical project ID")
 ENV=$(ask            "Infisical environment slug" "dev")
-URL=$(ask            "Infisical URL" "https://us.infisical.com")
+URL=$(ask            "Infisical URL" "https://app.infisical.com")
 CLIENT_ID=$(ask      "Infisical Universal Auth client ID")
 CLIENT_SECRET=$(ask_secret "Infisical Universal Auth client secret (input hidden)")
 echo

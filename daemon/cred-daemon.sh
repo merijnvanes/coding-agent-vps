@@ -31,7 +31,7 @@ SSH_AGENT_SOCKET="/var/lib/agent-vps/sockets/ssh-agent.sock"
 ALERTS_SCRIPT="/opt/agent-vps/alerts/ntfy.sh"
 
 # Defaults if not overridden by config.env
-INFISICAL_URL="${INFISICAL_URL:-https://us.infisical.com}"
+INFISICAL_URL="${INFISICAL_URL:-https://app.infisical.com}"
 INFISICAL_ENV="${INFISICAL_ENV:-dev}"
 
 # === Helpers ===
