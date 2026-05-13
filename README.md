@@ -4,9 +4,9 @@ A Hetzner VPS for running AI coding CLIs (Claude Code, Codex) inside a
 sandboxed Docker container with credentials held in a separate trust zone
 and fetched from Infisical. Single-developer setup, ~€5/month.
 
-The design — what we're building and why — lives in [REQUIREMENTS.md](./REQUIREMENTS.md)
-and [ARCHITECTURE.md](./ARCHITECTURE.md). This README is the operational
-walkthrough: pre-setup, provision, bootstrap, and rebuild.
+The design — what we're building and why — lives in [docs/REQUIREMENTS.md](./docs/REQUIREMENTS.md)
+and [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). This README is the
+operational walkthrough: pre-setup, provision, bootstrap, and rebuild.
 
 ---
 
@@ -240,7 +240,7 @@ Detach from tmux (`Ctrl-b d`) and you're done.
 
 ## Rotating credentials
 
-Per [REQUIREMENTS.md §5](./REQUIREMENTS.md#5-security-requirements),
+Per [docs/REQUIREMENTS.md §5](./docs/REQUIREMENTS.md#5-security-requirements),
 **credential rotation is the user's responsibility**, not the daemon's.
 The daemon only fetches the current value from Infisical.
 
@@ -294,7 +294,7 @@ deleting it.
   server is deleted, including all local disk and Docker volumes. You
   redo the OAuth logins. Adds ~2 min. To survive a full VPS rebuild you'd
   need a separately-attached Hetzner Cloud volume, which is not in v1
-  scope (REQUIREMENTS.md §6: backups are WON'T-v1).
+  scope (docs/REQUIREMENTS.md §6: backups are WON'T-v1).
 
 ---
 
@@ -367,9 +367,11 @@ is fully idempotent.
 
 ```
 .
-├── REQUIREMENTS.md            design decisions
-├── ARCHITECTURE.md            concrete component layout
 ├── README.md                  this file
+│
+├── docs/
+│   ├── REQUIREMENTS.md        design decisions
+│   └── ARCHITECTURE.md        concrete component layout
 │
 ├── cloud-init.yaml            minimal cloud-init template (Tailscale + clone repo + run cloud-init-tasks.sh)
 ├── docker-compose.yml         sandbox container spec

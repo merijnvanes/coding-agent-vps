@@ -13,7 +13,7 @@
 #
 # What this does NOT do:
 #   - Mint, rotate, or call any upstream service's API. Upstream credential
-#     lifecycle is the user's responsibility (REQUIREMENTS.md §5).
+#     lifecycle is the user's responsibility (docs/REQUIREMENTS.md §5).
 #
 # Runs as user `creds` via cred-daemon.service. Triggered:
 #   - On boot (multi-user.target)

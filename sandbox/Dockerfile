@@ -1,7 +1,7 @@
 # sandbox/Dockerfile — agent runtime image
 #
 # Built on the VPS at cloud-init time (`docker build`). No registry pull.
-# Image contains the toolchain pinned in REQUIREMENTS.md §5.
+# Image contains the toolchain pinned in docs/REQUIREMENTS.md §5.
 
 FROM ubuntu:24.04
 
@@ -39,7 +39,7 @@ ENV PNPM_HOME=/usr/local/pnpm
 ENV PATH="${PNPM_HOME}/bin:${PATH}"
 RUN mkdir -p "${PNPM_HOME}/bin"
 
-# /etc/npmrc — read by both pnpm and npm. Sets minimum-release-age (REQUIREMENTS.md §5):
+# /etc/npmrc — read by both pnpm and npm. Sets minimum-release-age (docs/REQUIREMENTS.md §5):
 #   pnpm 11+ reads `minimum-release-age` in minutes  (10080 = 7d)
 #   npm 11+  reads `min-release-age`     in days     (7      = 7d)
 # Setting both means any package manager run inside the sandbox enforces the policy.

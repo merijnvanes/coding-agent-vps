@@ -11,7 +11,7 @@
 #   __DEPLOY_KEY_B64__      base64-encoded ed25519 private key (read-only
 #                           deploy key, scoped to merijnvanes/coding-agent-vps)
 # Hetzner is the only third party that ever sees these — acceptable since
-# Hetzner is in the trusted-dependency set (REQUIREMENTS.md §2).
+# Hetzner is in the trusted-dependency set (docs/REQUIREMENTS.md §2).
 
 package_update: true
 package_upgrade: true
