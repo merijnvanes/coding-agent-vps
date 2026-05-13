@@ -25,6 +25,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# Auto-rewrite https://github.com/ URLs to git@github.com: so every git
+# operation inside the sandbox uses SSH (and therefore the bridged
+# ssh-agent loaded with the GitHub key). Agents can `git clone` HTTPS
+# URLs as usual; auth Just Works without per-session setup.
+RUN git config --system url."git@github.com:".insteadOf "https://github.com/"
+
 # --- Node.js LTS (22) + pnpm via corepack ---
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
