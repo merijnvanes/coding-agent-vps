@@ -331,12 +331,6 @@ sudo journalctl -u cred-daemon.service -n 20 --no-pager
 Look for `curl: (22) ... error: 422`. Re-run `bootstrap.sh` and use the
 UUID from Access Control → Identities → `agent-vps` → Universal Auth.
 
-### `bootstrap.sh` fails with HTTP 404
-
-URL was pasted with a trailing slash. The daemon now strips trailing
-slashes automatically; if you hit this on an old daemon, re-run
-`bootstrap.sh` and paste the URL with no trailing slash.
-
 ### Cloud-init seems stuck (no progress for 15+ min)
 
 SSH in (the merijn user is created early in cloud-init-tasks.sh) and
