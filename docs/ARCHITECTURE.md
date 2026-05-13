@@ -10,7 +10,7 @@ Concrete component layout and data flows for the system specified in [REQUIREMEN
    └─────────────────┬───────────────────┘
                      │ Tailscale only (no public ingress)
    ┌─────────────────▼─────────────────────────────────────┐
-   │  VPS — Hetzner CX22                                   │
+   │  VPS — Hetzner CX23                                   │
    │                                                       │
    │  ┌─ HOST ZONE (root) ──────────────────────────────┐  │
    │  │  Tailscale daemon | Docker (rootless) | OS      │  │
@@ -132,7 +132,7 @@ The cred-daemon does **not** mint, rotate, or otherwise call any upstream servic
 
 ## Rebuild flow
 
-**Scope note**: this is the *full VPS rebuild* flow (destroy server → recreate). For container-only refresh (watchtower image update, `docker compose up -d` after a Dockerfile change), the named volume `sandbox-state` persists, so OAuth tokens and tmux state survive — no OAuth re-login needed. Full VPS rebuild loses the volume (no backups in v1 — see REQUIREMENTS.md §6) and requires re-OAuth.
+**Scope note**: this is the *full VPS rebuild* flow (destroy server → recreate). For container-only refresh (`docker compose up -d --build` after a Dockerfile change), the named volumes `sandbox-state-claude` and `sandbox-state-codex` persist, so OAuth tokens survive — no OAuth re-login needed. The tmux session is killed on container recreate because tmux runs as a process inside the container. Full VPS rebuild loses all volumes (no backups in v1 — see REQUIREMENTS.md §6) and requires re-OAuth.
 
 Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using the admin token for the `coding-agent-vps` Hetzner project (kept in laptop's password manager; never enters the VPS).
 
@@ -152,16 +152,13 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 
 ```
 /etc/agent-vps/
-  infisical-uauth          0600  creds:creds   # bootstrap secret
-  config.yaml              0644  root:root     # cred-daemon config (which creds, which upstream)
+  infisical-uauth          0600  creds:creds   # bootstrap secret (client id+secret)
+  config.env               0644  root:root     # cred-daemon config (project ID, env slug, URL)
 
 /var/lib/agent-vps/
   creds/                                       # raw key material — sandbox cannot see this
-    gcp-sa-key.json        0600  creds:creds
-    cloudflare-token       0600  creds:creds
-    hetzner-token          0600  creds:creds   # apps-only scope (no VPS-management)
-    ssh-key                0600  creds:creds
-    npm-token              0600  creds:creds
+    github-ssh-key         0600  creds:creds   # loaded into ssh-agent at refresh
+    ntfy-topic             0600  creds:creds   # only the alert script reads this
   agent-config/                                # per-CLI config files; bind-mounted read-only into the sandbox
     gcloud/
       application_default_credentials.json  0644  creds:creds  # → /home/agent/.config/gcloud/...
@@ -170,45 +167,49 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
     env/
       cloudflare.sh                         0644  creds:creds  # sourced by entrypoint → CLOUDFLARE_API_TOKEN
       hetzner.sh                            0644  creds:creds  # sourced by entrypoint → HCLOUD_TOKEN (apps-only)
-  sockets/                                     # mounted into sandbox; 0755 dir, 0666 socket file
-    ssh-agent.sock         0666  creds:creds
-  sandbox-state/                               # named Docker volume — persists across container/image refresh
-    home-claude/                               # /home/agent/.claude (OAuth refresh tokens)
-    home-codex/                                # /home/agent/.codex (OAuth refresh tokens)
-    tmux/                                      # tmux socket + state
+      pypi.sh                               0644  creds:creds  # sourced by entrypoint → UV_PUBLISH_TOKEN, TWINE_*
+  sockets/                                     # mounted into sandbox; 0755 dir, 0666 socket files
+    ssh-agent.sock         0666  creds:creds   # raw ssh-agent — cred-daemon uses this directly
+    ssh-agent-bridge.sock  0666  creds:creds   # socat relay — sandbox uses this (UID-namespace bridge)
 
 /srv/dev/projects/                merijn:merijn   # mounted rw into sandbox at /work
 
-/opt/agent-vps/                   root:root      # cloned from https://github.com/merijnvanes/coding-agent-vps at cloud-init time
-  daemon/                                       # systemd service unit + main loop (fetch from Infisical, serve sockets)
-  integrations/                                 # per-CLI integration shims (write ADC file / env exports / config files)
-  alerts/                                       # ntfy publisher
+/opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time
+  daemon/                                       # cred-daemon, ssh-agent-creds, ssh-agent-bridge units
+  alerts/                                       # ntfy publisher (best-effort; logs to journal regardless)
+  scripts/                                      # provision.sh (laptop), cloud-init-tasks.sh, bootstrap.sh
   sandbox/
     Dockerfile                                  # built on the VPS via `docker build` at cloud-init time
-    entrypoint.sh                               # container entrypoint: sources /run/agent-env/*.sh at shell start
+    entrypoint.sh                               # container entrypoint: sets SSH_AUTH_SOCK + exec tmux
+    profile.d-agent-env.sh                      # sourced by interactive shells inside the container
 ```
 
+**Named Docker volumes** (host-side path varies by Docker storage driver; persist across container recreation):
+- `sandbox-state-claude` → `/home/agent/.claude` (Claude Code OAuth refresh tokens + project state)
+- `sandbox-state-codex` → `/home/agent/.codex` (Codex OAuth refresh tokens)
+- `sandbox-state` → `/home/agent/.local/state/agent-state` (reserved for future agent-state persistence; currently no writes)
+
 **Sandbox mounts (rootless Docker):**
-- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (socket mode 0666 — every local process can connect; on this single-user host that's only the rootless container, merijn, and root, all trusted by design)
+- `/var/lib/agent-vps/sockets/` → `/run/sockets/` (socket mode 0666; the sandbox connects to `ssh-agent-bridge.sock`, not the raw `ssh-agent.sock` — see daemon/ssh-agent-bridge.service for why)
 - `/var/lib/agent-vps/agent-config/gcloud/` → `/home/agent/.config/gcloud/` (read-only)
 - `/var/lib/agent-vps/agent-config/npm/npmrc` → `/home/agent/.npmrc` (read-only)
-- `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; entrypoint sources `*.sh` on shell start to set env-var creds)
-- `/var/lib/agent-vps/sandbox-state/` → `/home/agent/.claude`, `/home/agent/.codex`, `/tmp/tmux-*` (named volume, rw — preserves OAuth tokens and tmux session state across container refresh)
+- `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; `/etc/profile.d/agent-env.sh` sources `*.sh` on shell start to set env-var creds)
+- Named volumes (above) for `~/.claude`, `~/.codex`, `~/.local/state/agent-state`
 - `/srv/dev/projects/` → `/work` (rw)
 
 **Sandbox does NOT mount:** anything under `/etc/agent-vps/`, `/var/lib/agent-vps/creds/`, or `/opt/agent-vps/`.
 
 ## Alerting
 
-ntfy.sh free tier. cred-daemon publishes to a private topic; phone subscribes via the ntfy app.
+ntfy.sh free tier. cred-daemon calls a tiny ~20-line shell script (`alerts/ntfy.sh`) that always logs to stderr (captured by systemd journal) and additionally publishes to a private ntfy topic *if* `ntfy-topic` was populated in Infisical.
 
-Events that trigger an alert:
+Events that currently trigger an alert (all from `cred-daemon.sh`):
 
-- Infisical fetch failure (any reason — e.g. revoked machine identity, network issue, malformed response)
-- Production deploy detected (poll GCP/Cloudflare audit logs in cred-daemon's cron)
-- LLM rate-limit hit (tail Claude/Codex stderr for known error patterns)
+- Infisical fetch / auth failure (revoked identity, network down, malformed API response)
+- Invalid `github-ssh-key` material in Infisical (fails `ssh-keygen -y -P ''` validation; the previous key stays loaded)
+- `ssh-add` failure after key validation passed
 
-No alerting infrastructure beyond a ~20-line shell script using `curl` to publish to ntfy.
+Without `ntfy-topic` configured, alerts only go to the journal (`journalctl -u cred-daemon.service`) — no push notifications, but the audit trail is preserved.
 
 ## Decisions still open at architecture level
 
