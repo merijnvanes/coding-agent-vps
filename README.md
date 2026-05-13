@@ -7,7 +7,7 @@ fetched at runtime — never in your repo or shell environment.
 Single-developer setup. ~€5/month.
 
 > [!WARNING]
-> Experimental, unaudited, single-developer template. Security claims are best-effort, not guarantees. See [SECURITY.md](./SECURITY.md).
+> Single-developer template. Security claims are best-effort, not guarantees. See [SECURITY.md](./SECURITY.md).
 
 ## Why
 
