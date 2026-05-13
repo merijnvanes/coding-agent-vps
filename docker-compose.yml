@@ -2,8 +2,13 @@
 #
 # Runs under rootless Docker as user `merijn` (the human SSH user).
 # Mounts the per-CLI credential files (read-only) and the project working tree.
-# OAuth refresh tokens + tmux state live in the named volume `sandbox-state`,
-# which survives image refresh / container restart.
+#
+# OAuth refresh tokens (~/.claude, ~/.codex) live in named volumes that
+# survive image refresh / container recreation — no re-login needed
+# across `docker compose up -d --build`. The tmux session itself does
+# NOT survive container recreation (tmux is an in-container process,
+# not state on disk); re-attach with `docker exec -it sandbox tmux
+# attach -t main` after rebuild.
 
 services:
   sandbox:
