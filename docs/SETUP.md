@@ -126,9 +126,10 @@ provision.sh:
 
 ```bash
 NEW_USER="<their-choice>"
-# All files that reference the username (excluding docs and git history)
-git grep -l '\bmerijn\b' | grep -v '^docs/' | xargs sed -i.bak "s/\\bmerijn\\b/$NEW_USER/g"
-find . -name '*.bak' -delete
+# All files that reference the username (excluding docs and git history).
+# Uses perl rather than sed because GNU sed's `\b` word-boundary is not
+# portable to macOS BSD sed (it would silently match nothing).
+git grep -l '\bmerijn\b' | grep -v '^docs/' | xargs perl -i -pe "s/\bmerijn\b/$NEW_USER/g"
 git diff --stat            # show them what changed
 ```
 
