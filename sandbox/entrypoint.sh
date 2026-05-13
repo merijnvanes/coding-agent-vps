@@ -20,6 +20,19 @@ set -euo pipefail
 # See daemon/ssh-agent-bridge.service for the rationale.
 export SSH_AUTH_SOCK=/run/sockets/ssh-agent-bridge.sock
 
+# Claude Code stores its active config at ~/.claude.json (outside the
+# persisted ~/.claude/ volume) but writes backups INTO ~/.claude/backups/
+# (inside the volume). Container rebuilds wipe the active file but leave
+# the backups. Auto-restore from the most recent backup so users don't
+# have to re-init after every `docker compose up -d --build`.
+if [[ ! -f "$HOME/.claude.json" && -d "$HOME/.claude/backups" ]]; then
+  latest_backup=$(ls -1t "$HOME/.claude/backups/.claude.json.backup."* 2>/dev/null | head -1)
+  if [[ -n "$latest_backup" ]]; then
+    cp "$latest_backup" "$HOME/.claude.json"
+    echo "[entrypoint] restored ~/.claude.json from $(basename "$latest_backup")" >&2
+  fi
+fi
+
 if [[ $# -eq 0 ]]; then
   exec tmux new-session -A -s main
 else
