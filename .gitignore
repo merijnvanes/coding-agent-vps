@@ -1,3 +1,33 @@
+# Editor / OS noise
 .DS_Store
 *.swp
 *~
+
+# Secrets — never commit these. The credential daemon fetches the real
+# values from Infisical at runtime; nothing in this repo should ever
+# contain key material.
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+coding-agent-vps-deploy
+coding-agent-vps-deploy.pub
+coding-agent-vps-key
+coding-agent-vps-key.pub
+
+# Generated user-data (Tailscale auth-key + deploy private key substituted
+# into a temp copy of cloud-init.yaml by provision.sh)
+user-data
+user-data.yaml
+*.user-data
+
+# Local config overrides
+.local/
+local.env
