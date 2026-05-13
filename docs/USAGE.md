@@ -73,26 +73,39 @@ in-VM state.
 
 ## Incident response
 
-If you suspect the VPS is compromised:
+If you suspect the VPS is **actively compromised**, stop the bleeding
+first — kill the VPS — then revoke credentials. Cached env vars and
+in-flight API calls keep working until the process is gone, so killing
+the host is the highest-leverage action you can take.
 
-1. **Revoke the VPS's Infisical access.** Infisical → Access Control
-   → Identities → `agent-vps` → revoke the Universal Auth client
-   secret. The cred-daemon's next refresh will fail.
-2. **Revoke each upstream credential** at the issuing service: GitHub
-   SSH key (Settings → SSH and GPG keys → Delete), Cloudflare token,
-   GCP SA key, Hetzner apps token. Manual UI clicks per service.
-3. **Revoke OAuth grants** at https://console.anthropic.com (Claude)
-   and https://platform.openai.com (Codex). The refresh tokens in the
-   sandbox volume are NOT affected by Infisical revocation, so they
-   must be revoked at the OAuth issuer directly.
-4. **Kill the VPS:**
+1. **Kill the VPS immediately.** From your laptop:
    ```bash
    hcloud context use coding-agent-vps-admin
    hcloud server delete coding-agent-vps
    ```
+   This is the kill switch. The admin token lives only on your laptop;
+   the agent has no path to it and no way to prevent deletion.
+2. **Revoke OAuth grants** at https://console.anthropic.com (Claude)
+   and https://platform.openai.com (Codex). The refresh tokens lived
+   in the sandbox volume, which is now gone with the VPS — but the
+   OAuth grants at the issuer remain valid until you revoke them, so
+   if the agent already exfiltrated a token it could still be used
+   from elsewhere.
+3. **Revoke each upstream credential** at the issuing service: GitHub
+   SSH key (Settings → SSH and GPG keys → Delete), Cloudflare token,
+   GCP SA key, Hetzner apps token, npm/PyPI tokens. Manual UI clicks
+   per service. Assume any credential the daemon had fetched is in
+   the attacker's hands.
+4. **Revoke the VPS's Infisical access.** Infisical → Access Control
+   → Identities → `agent-vps` → revoke the Universal Auth client
+   secret. Belt-and-suspenders — with the VPS deleted there's no
+   client to use the secret, but revoking ensures the secret can't be
+   reused if it leaked.
 5. **Reprovision** by running `./scripts/provision.sh` (or by having
    your agent walk you through SETUP.md again — much shorter the
-   second time since external services are already configured).
+   second time since external services are already configured). Make
+   sure to mint fresh credentials at each upstream service before
+   pasting them into Infisical for the new instance.
 
 ## Rebuild
 
