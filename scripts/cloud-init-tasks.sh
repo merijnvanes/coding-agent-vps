@@ -111,7 +111,7 @@ sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \
   bash -lc 'systemctl --user enable --now docker'
 
 # === 5. Build the sandbox image ===
-log "building sandbox image (~5–10 min on a CX22)"
+log "building sandbox image (~5–10 min on a CX23)"
 sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \
   bash -lc 'cd /opt/agent-vps && docker build -t coding-agent-vps/sandbox:latest ./sandbox'
 

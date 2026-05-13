@@ -178,7 +178,8 @@ Day-1 contents of the sandbox image:
 ### Logging / observability
 
 - **SHOULD** — Basic visibility (refresh-daemon logs, sandbox start/stop records) if low cost and low effort. Don't build elaborate logging infra for it.
-- **SHOULD** — Minimal alerting on (a) Infisical refresh failures, (b) production deploy events, (c) Anthropic/OpenAI rate-limit hits (proxy for runaway use). Delivery via email or ntfy/Pushover — a ~20-line script, not an observability stack.
+- **SHOULD** — Minimal alerting on cred-daemon errors (Infisical refresh failures, invalid SSH-key material). Delivery via ntfy (push) with stderr/journal fallback — a ~20-line script (`alerts/ntfy.sh`), not an observability stack. **Implemented in v1.**
+- **WON'T (v1)** — Alerting on production deploy events or LLM rate-limit hits. Would require either polling external audit logs (deploy events) or tailing/parsing CLI stderr for known error strings (rate-limit). Out of scope for v1; both are reasonable v2 additions to `alerts/ntfy.sh`.
 - **WON'T (v1)** — Compliance-grade audit logging with full attribution.
 
 ## 7. Constraints & preferences

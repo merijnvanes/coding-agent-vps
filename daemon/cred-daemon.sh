@@ -166,8 +166,8 @@ fi
 #   hcloud-token       → CONFIG_DIR/env/hetzner.sh       (0644, env-export)
 #   npm-token          → CONFIG_DIR/npm/npmrc            (0644)
 #   pypi-token         → CONFIG_DIR/env/pypi.sh          (0644, env-export for uv/pip)
-#   docker-hub-token   → CONFIG_DIR/env/docker-hub.sh    (0644, env-export)
 #   ntfy-topic         → CREDS_DIR/ntfy-topic            (0600)
+# (docker-hub-token deferred — see comment below the integration block)
 
 # --- github-ssh-key (private key + load into ssh-agent) ---
 # Validate the new key BEFORE clearing the agent. If validation fails, keep

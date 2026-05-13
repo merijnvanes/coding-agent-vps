@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sandbox/entrypoint.sh — container entrypoint
 #
-# Env-export files (CLOUDFLARE_API_TOKEN, HCLOUD_TOKEN, PyPI, Docker Hub)
+# Env-export files (CLOUDFLARE_API_TOKEN, HCLOUD_TOKEN, PyPI tokens)
 # are sourced via /etc/profile.d/agent-env.sh (installed by the Dockerfile),
 # which is read by every interactive bash login shell — including new tmux
 # windows. That way a rotation that updates the file on disk reaches the
