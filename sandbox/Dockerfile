@@ -59,14 +59,21 @@ RUN curl -fsSL https://sdk.cloud.google.com -o /tmp/install-gcloud.sh \
     && rm /tmp/install-gcloud.sh
 
 # --- wrangler (Cloudflare) — global install via pnpm ---
-RUN pnpm add -g wrangler
+# pnpm 10+ blocks postinstall scripts by default (supply-chain hardening).
+# wrangler/claude-code/codex all need their postinstall to run to download
+# native binaries. --allow-build whitelists them explicitly.
+RUN pnpm add -g --allow-build=wrangler wrangler
 
 # --- hcloud CLI (Hetzner) ---
 RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz" \
       | tar -xz -C /usr/local/bin hcloud
 
 # --- AI coding CLIs — global install via pnpm ---
-RUN pnpm add -g @anthropic-ai/claude-code @openai/codex
+# See --allow-build rationale above (wrangler block).
+RUN pnpm add -g \
+      --allow-build=@anthropic-ai/claude-code \
+      --allow-build=@openai/codex \
+      @anthropic-ai/claude-code @openai/codex
 
 # --- non-root agent user ---
 # Pre-create the volume mount paths so named volumes inherit agent:agent
@@ -81,6 +88,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
     && mkdir -p /work \
                 /home/agent/.claude \
                 /home/agent/.codex \
+                /home/agent/.config \
                 /home/agent/.local/state/agent-state \
     && chown -R agent:agent /work /home/agent
 
