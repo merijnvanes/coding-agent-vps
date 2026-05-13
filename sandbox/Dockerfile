@@ -73,7 +73,11 @@ RUN pnpm add -g @anthropic-ai/claude-code @openai/codex
 # ownership on first attach (Docker copies the existing dir's mode/ownership
 # into an empty named volume). Without this, first `claude login` etc. would
 # write to a root-owned volume and fail.
-RUN useradd --create-home --shell /bin/bash --uid 1000 agent \
+#
+# Ubuntu 24.04 base ships a default `ubuntu` user at UID 1000 (new in noble);
+# remove it first so our `agent` user can claim 1000.
+RUN userdel -r ubuntu 2>/dev/null || true \
+    && useradd --create-home --shell /bin/bash --uid 1000 agent \
     && mkdir -p /work \
                 /home/agent/.claude \
                 /home/agent/.codex \
