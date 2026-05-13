@@ -82,7 +82,7 @@ Three zones on the VPS, three trust levels.
 |---|---|---|
 | Tailscale daemon | host | Ingress (Tailscale-only, deny-all ACL) + outbound mesh |
 | Docker engine | host | Container runtime, configured for rootless |
-| cred-daemon | creds | Fetches credentials from Infisical (daily + on sandbox start), runs socket server, publishes alerts |
+| cred-daemon | creds | Fetches credentials from Infisical (at host boot, daily via systemd timer, and on manual `systemctl start`), routes them to per-CLI files, alerts on failure |
 | ssh-agent | creds | Signs git/ssh challenges originating in sandbox (true signing oracle — private key never leaves creds zone) |
 | Per-CLI credential shims | creds | Bespoke per upstream CLI; see "Per-CLI integration" below |
 | Sandbox container | sandbox | Runs the agent + project work |
@@ -116,7 +116,7 @@ All of these except SSH put the raw bearer token somewhere the sandbox process c
 
 ## Daily refresh flow
 
-Cron at 04:00 in the creds zone, executed as `creds` user. Also triggered on sandbox container startup.
+systemd timer (`cred-daemon.timer`, OnCalendar=04:00 UTC daily, Persistent=true) in the creds zone, executed as `creds` user. Also runs at host boot (`cred-daemon.service` is `WantedBy=multi-user.target`) and on demand via `systemctl start cred-daemon`. There is no sandbox-container-startup hook — credential availability for the sandbox comes from the cached on-disk files written by the daemon, which are bind-mounted into the container.
 
 1. cred-daemon reads bootstrap secret from `/etc/agent-vps/infisical-uauth`
 2. Authenticates to Infisical Universal Auth → receives short-lived access token
