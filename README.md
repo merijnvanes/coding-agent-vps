@@ -29,7 +29,7 @@ VPS gives a few specific properties you can't get locally:
 
 - ~€5/mo for the VPS, free tier for Infisical and Tailscale.
 - ~30 min of one-time external-service setup across Hetzner Cloud,
-  Infisical, Tailscale, GitHub, and a phone-side ntfy install.
+  Infisical, Tailscale, and GitHub.
 - Latency on every keystroke (round-trip to Frankfurt or whichever
   Hetzner location you provision).
 - A new operating model: SSH + tmux + docker exec instead of native

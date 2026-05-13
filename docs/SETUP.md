@@ -103,8 +103,13 @@ Before starting, confirm the user has (or direct them to create):
 - An Infisical account (free tier, no card). https://infisical.com
 - A Tailscale account (free tier). https://tailscale.com
 - A GitHub account.
-- A phone with the ntfy app installed (for alerts). https://ntfy.sh
 - ~30 min of time to complete the flow.
+
+**Optional:** push notifications when credentials fail to refresh.
+If the user wants this, have them install the [ntfy](https://ntfy.sh)
+app on their phone now — they'll subscribe to a topic in Phase 2.
+Without it, the same alerts still land in `journalctl -u cred-daemon`
+on the VPS; the user just won't get a phone buzz.
 
 If anything is missing, pause and have them sign up first.
 
@@ -217,11 +222,11 @@ Secrets → New Secret for each:
 |---|---|---|
 | `github-ssh-key` | Yes (filled in Phase 4) | Generated in Phase 4 |
 | `hcloud-token` | Yes | The apps-project token from Phase 1 step 4 |
-| `ntfy-topic` | Yes (else no alerts) | `openssl rand -hex 8` on their laptop |
 | `cloudflare-token` | If they use Cloudflare | Cloudflare → My Profile → API Tokens |
 | `gcp-sa-key` | If they use GCP | Existing service-account key JSON, entire content |
 | `npm-token` | Optional | npm → Profile → Access Tokens |
 | `pypi-token` | Optional | PyPI → Account Settings → API Tokens |
+| `ntfy-topic` | Optional | `openssl rand -hex 8` — only needed if the user wants push notifications for credential failures (and installed the ntfy app earlier) |
 
 Tell the user: skip secrets they don't need. The cred-daemon silently
 skips missing secrets; they can add more later by populating the

@@ -38,6 +38,25 @@ To rotate:
    etc.): existing tmux windows keep the stale value until you open a
    new tmux window or run `exec $SHELL`.
 
+## Adding push alerts later
+
+If you skipped ntfy during setup but want push notifications now:
+
+1. Install the [ntfy](https://ntfy.sh) app on your phone.
+2. Generate a random topic name: `openssl rand -hex 8`.
+3. Subscribe to that topic in the ntfy app.
+4. In Infisical, add a new secret `ntfy-topic` with that value (in the
+   same environment you populated other secrets).
+5. SSH into the VPS and force a refresh:
+   ```bash
+   sudo systemctl start cred-daemon
+   ```
+
+From that point on, cred-daemon failures (Infisical unreachable,
+invalid SSH key uploaded, etc.) will buzz your phone. The alerts that
+fired in the meantime are in `journalctl -u cred-daemon.service` on
+the VPS.
+
 ## Killing the VPS
 
 The kill switch is the Hetzner admin token, which lives only on your
