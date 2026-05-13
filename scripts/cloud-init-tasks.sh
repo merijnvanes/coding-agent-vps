@@ -117,12 +117,17 @@ sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \
 
 # === 6. systemd units ===
 log "installing systemd units"
-install -m 0644 /opt/agent-vps/daemon/cred-daemon.service     /etc/systemd/system/
-install -m 0644 /opt/agent-vps/daemon/cred-daemon.timer       /etc/systemd/system/
-install -m 0644 /opt/agent-vps/daemon/ssh-agent-creds.service /etc/systemd/system/
+install -m 0644 /opt/agent-vps/daemon/cred-daemon.service      /etc/systemd/system/
+install -m 0644 /opt/agent-vps/daemon/cred-daemon.timer        /etc/systemd/system/
+install -m 0644 /opt/agent-vps/daemon/ssh-agent-creds.service  /etc/systemd/system/
+install -m 0644 /opt/agent-vps/daemon/ssh-agent-bridge.service /etc/systemd/system/
 systemctl daemon-reload
 # ssh-agent for creds — must be running before cred-daemon attempts ssh-add
 systemctl enable --now ssh-agent-creds.service
+# socat bridge — must be running before the sandbox can use the agent
+# (ssh-agent's peer-UID check rejects direct sandbox connections; see
+#  daemon/ssh-agent-bridge.service for the rationale)
+systemctl enable --now ssh-agent-bridge.service
 # Daily refresh timer. --now starts it in this boot so the schedule is live
 # without waiting for a reboot.
 systemctl enable --now cred-daemon.timer

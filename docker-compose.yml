@@ -51,8 +51,10 @@ services:
       - sandbox-state-codex:/home/agent/.codex
 
     environment:
-      # ssh-agent socket path (must match entrypoint.sh)
-      SSH_AUTH_SOCK: /run/sockets/ssh-agent.sock
+      # ssh-agent socket path — points at the socat bridge, not the raw
+      # ssh-agent socket. See daemon/ssh-agent-bridge.service for why.
+      # Must match entrypoint.sh.
+      SSH_AUTH_SOCK: /run/sockets/ssh-agent-bridge.sock
       # gcloud reads ADC from this path by default; set explicitly to be safe
       GOOGLE_APPLICATION_CREDENTIALS: /home/agent/.config/gcloud/application_default_credentials.json
 

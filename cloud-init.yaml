@@ -25,6 +25,7 @@ packages:
   - openssh-client
   - openssh-server
   - openssl
+  - socat
   - sudo
   - tmux
   - ufw

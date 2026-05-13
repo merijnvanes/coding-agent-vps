@@ -13,7 +13,12 @@
 
 set -euo pipefail
 
-export SSH_AUTH_SOCK=/run/sockets/ssh-agent.sock
+# Use the socat-bridged socket (not the raw ssh-agent socket). ssh-agent's
+# kernel-level peer-UID check rejects direct connections from the sandbox
+# because rootless Docker maps the container's `agent` user (UID 1000) to
+# host UID 100999, which doesn't match ssh-agent's UID (999, `creds`).
+# See daemon/ssh-agent-bridge.service for the rationale.
+export SSH_AUTH_SOCK=/run/sockets/ssh-agent-bridge.sock
 
 if [[ $# -eq 0 ]]; then
   exec tmux new-session -A -s main

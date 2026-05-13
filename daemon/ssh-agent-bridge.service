@@ -1,0 +1,40 @@
+[Unit]
+Description=SSH agent bridge (UID-namespace-spanning socat relay for the sandbox)
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+Wants=ssh-agent-creds.service
+After=ssh-agent-creds.service
+
+[Service]
+Type=simple
+User=creds
+Group=creds
+# Why this exists: ssh-agent does a kernel-level peer-UID check on every
+# connection and rejects clients whose effective UID doesn't match its own.
+# The rootless-Docker-mapped sandbox `agent` user lives at host UID 100999
+# (= subuid base 100000 + container UID 1000 - 1), while ssh-agent runs as
+# `creds` (UID 999). Direct connections from the sandbox are rejected by
+# ssh-agent with "uid mismatch: peer euid 100999 != uid 999", regardless of
+# socket file permissions.
+#
+# This bridge runs as the SAME UID as ssh-agent (creds → creds), so its
+# own connection to ssh-agent passes the UID check. It exposes a separate
+# 0666 socket that the sandbox connects to; socat just relays bytes after
+# the connection is established. ssh-agent only checks peer UID at
+# connection setup, not per-message, so the relay is transparent.
+#
+# cred-daemon continues to use ssh-agent.sock directly (same UID, no
+# bridge needed) — only the sandbox uses ssh-agent-bridge.sock.
+ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
+ExecStart=/usr/bin/socat UNIX-LISTEN:/var/lib/agent-vps/sockets/ssh-agent-bridge.sock,fork,reuseaddr,mode=0666 UNIX-CONNECT:/var/lib/agent-vps/sockets/ssh-agent.sock
+KillMode=mixed
+Restart=on-failure
+RestartSec=2
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-vps
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

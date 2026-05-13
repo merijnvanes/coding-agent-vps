@@ -384,10 +384,11 @@ is fully idempotent.
 │   └── profile.d-agent-env.sh sourced by interactive shells inside the container
 │
 ├── daemon/
-│   ├── cred-daemon.sh         main fetch loop (Infisical → local cache + ssh-agent)
-│   ├── cred-daemon.service    systemd unit (User=creds, oneshot)
-│   ├── cred-daemon.timer      daily 04:00 UTC refresh
-│   └── ssh-agent-creds.service long-running ssh-agent for the creds user
+│   ├── cred-daemon.sh           main fetch loop (Infisical → local cache + ssh-agent)
+│   ├── cred-daemon.service      systemd unit (User=creds, oneshot)
+│   ├── cred-daemon.timer        daily 04:00 UTC refresh
+│   ├── ssh-agent-creds.service  long-running ssh-agent for the creds user
+│   └── ssh-agent-bridge.service socat relay so the sandbox (mapped UID) can use the agent
 │
 └── alerts/
     └── ntfy.sh                publishes to ntfy.sh + logs to stderr
