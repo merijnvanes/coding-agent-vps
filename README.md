@@ -34,7 +34,7 @@ alternatives in the setup prompt and the agent adapts the code first.
 ## Setup
 
 > [!WARNING]
-> Always audit third-party code before installing.
+> Always audit third-party code before running.
 
 Open a fresh AI coding agent session (Claude Code, Codex, or similar)
 and paste:
