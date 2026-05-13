@@ -49,11 +49,12 @@ services:
         target: /work
         read_only: false
 
-      # Sandbox state — OAuth tokens + tmux session state. Named volume,
-      # survives image refresh.
-      - sandbox-state:/home/agent/.local/state/agent-state
-      - sandbox-state-claude:/home/agent/.claude
-      - sandbox-state-codex:/home/agent/.codex
+      # Sandbox state — named volumes that survive `docker compose up -d
+      # --build`. Only on-disk state persists; in-container processes
+      # like tmux are killed and have to be re-attached after rebuild.
+      - sandbox-state:/home/agent/.local/state/agent-state    # reserved; currently no writes
+      - sandbox-state-claude:/home/agent/.claude              # Claude Code OAuth refresh token + project state
+      - sandbox-state-codex:/home/agent/.codex                # Codex OAuth refresh token
 
     environment:
       # ssh-agent socket path — points at the socat bridge, not the raw

@@ -151,7 +151,7 @@ Day-1 contents of the sandbox image:
 - **Runtimes + package managers**: Node + `pnpm`, Python + `uv`
 - **Deploy CLIs**: `wrangler` (Cloudflare), `gcloud` (GCP), `hcloud` (Hetzner)
 
-- **SHOULD** — Agent sessions run inside `tmux` so SSH disconnects and container restarts don't kill in-progress work.
+- **SHOULD** — Agent sessions run inside `tmux` so SSH disconnects don't kill in-progress work. (Note: tmux is an in-container process, so it does NOT survive container recreation — a full `docker compose up -d --build` kills the tmux server. Reattach after rebuild with `docker exec -it sandbox tmux attach -t main`.)
 - **SHOULD** — The image build is version-controlled (Dockerfile in a repo). Changes are auditable and reversible.
 - **Acknowledged** — A minimal image is NOT a hard command allowlist: anything with a working package manager (or `bash` + `curl`) can install more at runtime. The value is reducing the *default* attack surface, not a per-action gate.
 - **COULD (later phase)** — Tighten further with read-only filesystem, non-root user, and seccomp/AppArmor profiles that block writes to system bin dirs. Meaningful against active attackers, but added complexity.

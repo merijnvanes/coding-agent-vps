@@ -3,17 +3,19 @@
 #
 # Minimal entrypoint: install Tailscale, join the tailnet via the auth-key
 # (substituted by scripts/provision.sh before this file is sent to Hetzner),
-# clone the repo using a read-only deploy key (also substituted by
-# provision.sh), then hand off to scripts/cloud-init-tasks.sh for the rest.
+# clone the repo (HTTPS for public repos, SSH+deploy-key for private), then
+# hand off to scripts/cloud-init-tasks.sh for the rest.
 #
-# Two secrets in user-data — both injected by scripts/provision.sh:
+# Placeholders injected by scripts/provision.sh:
 #   __TAILSCALE_AUTH_KEY__  single-use, short-TTL Tailscale auth key
-#   __DEPLOY_KEY_B64__      base64-encoded ed25519 private key (read-only
-#                           deploy key, scoped to the repo this checkout
-#                           was cloned from). For public repos this is
-#                           empty — clone happens over HTTPS and the
-#                           deploy-key file is created empty + unused.
-#   __CLONE_URL__           https:// for public repos, git@github.com: for private
+#   __CLONE_URL__           https://github.com/... for public repos,
+#                           git@github.com:... for private (SSH form)
+#   __DEPLOY_KEY_B64__      base64-encoded ed25519 private key — only
+#                           meaningful for private repos. For public
+#                           repos a 1-byte placeholder is substituted
+#                           so the write_files block stays valid; the
+#                           resulting file is unused (HTTPS clone needs
+#                           no auth).
 # Hetzner is the only third party that ever sees these — acceptable since
 # Hetzner is in the trusted-dependency set (docs/REQUIREMENTS.md §2).
 

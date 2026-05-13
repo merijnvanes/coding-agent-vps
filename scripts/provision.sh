@@ -91,14 +91,22 @@ fi
 
 # Warn if there are local commits or working-tree changes not on origin —
 # cloud-init clones from origin, so unpushed work won't reach the VPS.
-LOCAL_AHEAD=$(git rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0)
+HAS_UPSTREAM=true
+git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || HAS_UPSTREAM=false
+
+LOCAL_AHEAD=0
+if $HAS_UPSTREAM; then
+  LOCAL_AHEAD=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
+fi
 WORKING_DIRTY=$(git status --porcelain 2>/dev/null | head -c1)
-if [[ "$LOCAL_AHEAD" -gt 0 || -n "$WORKING_DIRTY" ]]; then
+
+if ! $HAS_UPSTREAM || [[ "$LOCAL_AHEAD" -gt 0 || -n "$WORKING_DIRTY" ]]; then
   echo
-  echo "WARNING: this checkout has unpushed or uncommitted changes:"
-  [[ "$LOCAL_AHEAD" -gt 0 ]] && echo "  - ${LOCAL_AHEAD} commit(s) ahead of origin/$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
-  [[ -n "$WORKING_DIRTY" ]]   && echo "  - uncommitted changes in the working tree"
-  echo "Cloud-init clones from origin, so these changes will NOT reach the VPS."
+  echo "WARNING: this checkout may have changes not on origin:"
+  $HAS_UPSTREAM                 || echo "  - no upstream tracking branch — cannot compare to origin"
+  [[ "$LOCAL_AHEAD" -gt 0 ]]    && echo "  - ${LOCAL_AHEAD} commit(s) ahead of $(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)"
+  [[ -n "$WORKING_DIRTY" ]]     && echo "  - uncommitted changes in the working tree"
+  echo "Cloud-init clones from origin, so anything not pushed will NOT reach the VPS."
   echo "Push your changes first (and rerun) if you intend them to apply."
   echo
   read -rp "Continue anyway? (yes/N): " confirm
