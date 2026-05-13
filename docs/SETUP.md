@@ -250,21 +250,48 @@ Phase 6.
 
 ## Phase 3: Tailscale (~5 min)
 
-**Goal.** ACL with `tagOwners` + an `ssh` policy for
-`tag:coding-agent-vps`, plus a fresh auth-key generated with that tag
-ticked.
+**Goal.** ACL that (a) lets the user's laptop reach the VPS, (b) blocks
+the reverse direction (VPS cannot initiate connections back to the
+laptop or other tailnet devices), plus a Tailscale SSH policy and an
+auth-key generated with the tag ticked.
+
+The reverse-direction block is what bounds the agent's blast radius —
+a compromised sandbox cannot port-scan the user's laptop or pivot to
+other devices on their tailnet.
 
 ### Manual steps (have the user do these)
 
-Open https://login.tailscale.com/admin/acls/file. Have the user MERGE
-these blocks into their existing ACL — do not overwrite other keys
-they already have:
+Open https://login.tailscale.com/admin/acls/file. The user's existing
+ACL is one of two shapes:
+
+- **Default Tailscale ACL** for new tailnets: a single rule
+  `{"action":"accept","src":["*"],"dst":["*:*"]}` — allow everything.
+  This rule MUST go (otherwise the VPS→laptop direction stays open
+  and the explicit rule below is shadowed).
+- **Customized ACL** with multiple rules: confirm there is no rule
+  with `"src": ["tag:coding-agent-vps"]` or `"src": ["*"]` that would
+  let traffic flow *from* the VPS.
+
+Have the user MERGE these blocks into their ACL (replacing any
+catch-all `*→*` rule):
 
 ```jsonc
 {
+  // Network ACL: laptop can reach the VPS; VPS cannot reach the laptop
+  // (no rule with src: tag:coding-agent-vps, on purpose).
+  "acls": [
+    {
+      "action": "accept",
+      "src":    ["autogroup:member"],
+      "dst":    ["tag:coding-agent-vps:*"]
+    }
+  ],
+
   "tagOwners": {
     "tag:coding-agent-vps": ["autogroup:admin"]
   },
+
+  // Tailscale SSH is gated independently of the network ACL above.
   "ssh": [
     {
       "action": "accept",
@@ -276,7 +303,9 @@ they already have:
 }
 ```
 
-(Substitute `<USER>` with the username chosen earlier.)
+(Substitute `<USER>` with the username chosen earlier. If they already
+have `acls`/`tagOwners`/`ssh` blocks for other devices, merge sibling
+entries into them rather than overwriting.)
 
 > **Critical — this is the single most-missed step:** when generating
 > the auth-key in the next step, the user MUST tick
