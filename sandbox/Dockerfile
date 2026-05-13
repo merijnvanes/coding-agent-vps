@@ -31,6 +31,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # URLs as usual; auth Just Works without per-session setup.
 RUN git config --system url."git@github.com:".insteadOf "https://github.com/"
 
+# Pin GitHub's published ed25519 host key system-wide so SSH never falls
+# back to TOFU (`ssh-keyscan`). Same string as cloud-init.yaml — sourced
+# once from https://api.github.com/meta. /etc/ssh/ssh_known_hosts is read
+# by every user in the container.
+RUN mkdir -p /etc/ssh && \
+    printf 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n' \
+      >> /etc/ssh/ssh_known_hosts
+
 # --- Node.js LTS (22) + pnpm via corepack ---
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
