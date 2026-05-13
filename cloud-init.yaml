@@ -81,7 +81,7 @@ runcmd:
   #    doesn't enforce mode), then clone over SSH using the deploy key.
   - chmod 0700 /root/.ssh
   - mkdir -p /opt/agent-vps
-  - git clone git@github.com:merijnvanes/coding-agent-vps.git /opt/agent-vps
+  - git clone git@github.com:__GH_REPO__.git /opt/agent-vps
   - bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 
 final_message: "Cloud-init complete. SSH in via Tailscale and run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"

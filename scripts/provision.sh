@@ -23,13 +23,33 @@ TYPE="${TYPE:-cx23}"                   # 2 vCPU / 4GB / 40GB shared x86 (~€4.5
 IMAGE="${IMAGE:-ubuntu-24.04}"
 FIREWALL="${FIREWALL:-agent-vps-deny-all}"
 
-# Repo-scoped read-only deploy key. Generated once, registered on the private
-# GitHub repo, then embedded in cloud-init user-data so the VPS can `git clone`
-# at first boot. Same trust class as the Tailscale auth-key (Hetzner sees the
-# user-data once); read-only and scoped to this one repo.
+# Repo-scoped read-only deploy key. Generated once, registered on the
+# GitHub repo (yours or your fork's), then embedded in cloud-init user-data
+# so the VPS can `git clone` at first boot. Same trust class as the
+# Tailscale auth-key (Hetzner sees the user-data once); read-only and
+# scoped to this one repo.
 DEPLOY_KEY_PATH="${DEPLOY_KEY_PATH:-$HOME/.ssh/coding-agent-vps-deploy}"
 DEPLOY_KEY_TITLE="coding-agent-vps deploy key (provision.sh)"
-GH_REPO="${GH_REPO:-merijnvanes/coding-agent-vps}"
+
+# Auto-detect the GitHub repo from the local `origin` remote so forks
+# Just Work without editing this file. Override with `GH_REPO=owner/repo`
+# if you need to point at a different repo (e.g. a tarball clone with no
+# origin set).
+if [[ -z "${GH_REPO:-}" ]]; then
+  ORIGIN_URL=$(git remote get-url origin 2>/dev/null) || {
+    echo "ERROR: no 'origin' remote in this git repo (or not a git repo)." >&2
+    echo "Set GH_REPO=owner/repo manually, or push this checkout to GitHub first." >&2
+    exit 1
+  }
+  GH_REPO=$(printf '%s' "$ORIGIN_URL" \
+    | sed -nE 's|^(https://github\.com/|git@github\.com:)([^/]+/[^/.]+)(\.git)?$|\2|p')
+  [[ -n "$GH_REPO" ]] || {
+    echo "ERROR: couldn't parse owner/repo from origin URL: $ORIGIN_URL" >&2
+    echo "Set GH_REPO=owner/repo manually." >&2
+    exit 1
+  }
+  echo "Using GH_REPO=$GH_REPO (auto-detected from git origin)"
+fi
 
 # Use the admin context for this run
 hcloud context use "$CONTEXT" \
@@ -88,6 +108,7 @@ USER_DATA=$(mktemp)
 trap 'rm -f "$USER_DATA"' EXIT
 sed -e "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" \
     -e "s|__DEPLOY_KEY_B64__|${DEPLOY_KEY_B64}|g" \
+    -e "s|__GH_REPO__|${GH_REPO}|g" \
     cloud-init.yaml > "$USER_DATA"
 
 echo "Provisioning $SERVER_NAME (type=$TYPE, location=$LOCATION, firewall=$FIREWALL)..."
