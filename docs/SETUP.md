@@ -18,6 +18,82 @@ and surface the specific symptom.
 agent and let it drive. Stay near the keyboard — you'll be asked to
 click through browser tabs.
 
+## Phase 0: Provider choices
+
+This repo is a template. The default implementation uses:
+
+| Role | Default | Provider-specific code |
+|---|---|---|
+| Cloud VPS | Hetzner Cloud | `scripts/provision.sh`, parts of `cloud-init.yaml` |
+| Secret store | Infisical | `daemon/cred-daemon.sh` (auth + fetch), `scripts/bootstrap.sh` (prompts) |
+| Network + SSH | Tailscale | `cloud-init.yaml` (install + `tailscale up`), Tailscale ACL config |
+| Git host | GitHub | `scripts/provision.sh` (deploy key API), `cloud-init.yaml` (clone URL), GitHub SSH host-key pinning |
+| Alerts | ntfy | `alerts/ntfy.sh` |
+
+**Ask the user which providers they want before continuing.** Example:
+
+> "The default setup uses Hetzner + Infisical + Tailscale + GitHub +
+> ntfy. Are those fine, or do you want to swap any of them out?"
+
+### If the user picks all defaults
+
+Skip the rest of this phase and continue with the Prerequisites
+section below. The remaining phases assume the defaults.
+
+### If the user picks one or more alternatives
+
+You need to refactor the code BEFORE running `provision.sh`. This is
+not a config-flag swap — it's modifying the provider-specific code in
+the files listed above. The high-level shape of each integration is
+the same; only the concrete API calls / CLIs / config syntax differ.
+
+Walk through the refactor in this order, with the user's confirmation
+on each block:
+
+1. **Cloud provider** — pick the equivalent of Hetzner Cloud (e.g.
+   DigitalOcean `doctl`, Linode `linode-cli`, AWS Lightsail, GCP).
+   The required capabilities are: per-project API tokens (so the
+   agent VPS lives in its own project, isolated from the user's
+   workloads), a network firewall attached at creation, and
+   cloud-init user-data support. Replace `hcloud` CLI calls in
+   `scripts/provision.sh` with the equivalent. Update the firewall
+   pattern in `scripts/provision.sh` and any `cloud-init.yaml`
+   references.
+
+2. **Secret store** — pick the equivalent of Infisical (HashiCorp
+   Vault with AppRole, AWS Secrets Manager, GCP Secret Manager,
+   Doppler, 1Password Secrets Automation). The required shape is:
+   a "bootstrap" credential held only by the VPS's `creds` user that
+   lets it fetch the real secrets from the store. Refactor the auth
+   + fetch loop in `daemon/cred-daemon.sh` and the prompts in
+   `scripts/bootstrap.sh`. Keep the same secret names (`github-ssh-key`,
+   `hcloud-token`, etc.) so the rest of the wire-up is unchanged.
+
+3. **Network access** — pick the equivalent of Tailscale (WireGuard
+   self-hosted, Cloudflare Zero Trust, Twingate). The required shape
+   is: deny-all inbound at the firewall, and an authenticated overlay
+   network the user's laptop joins. The current Tailscale-specific
+   parts: `cloud-init.yaml` (install + `tailscale up --ssh`), ACL
+   instructions in this guide (Phase 3 below). Tailscale SSH is
+   nice-to-have but not load-bearing — you can fall back to standard
+   SSH + Tailscale-only port exposure.
+
+4. **Git host** — only relevant if the user's repos are on something
+   other than GitHub (e.g. GitLab, Codeberg, Forgejo, Bitbucket).
+   Update the SSH host-key pin in `cloud-init.yaml`, the deploy-key
+   registration in `scripts/provision.sh` (replace `gh api` with the
+   host's API), and the clone URL.
+
+5. **Alerts** — `alerts/ntfy.sh` is the only file to swap. Common
+   alternatives: Slack webhook, Discord webhook, Telegram bot, plain
+   SMTP.
+
+After the refactor, have the user review the diff
+(`git diff main`), commit it, then continue with the Prerequisites
+section and the remaining phases. The phase structure below stays the
+same — only the specific values asked-for in each phase change to
+match the chosen providers.
+
 ## Prerequisites — confirm with the user first
 
 Before starting, confirm the user has (or direct them to create):

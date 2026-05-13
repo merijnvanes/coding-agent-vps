@@ -43,6 +43,24 @@ or credentials whose blast radius you care about bounding. If you'd
 just run the agent in a throwaway local VM anyway, this is probably
 over-engineering for you.
 
+### Template — providers are swappable
+
+This repo is a working template. The defaults are concrete choices:
+
+- **Hetzner Cloud** for the VPS
+- **Infisical** for the credential store
+- **Tailscale** for network access + SSH
+- **GitHub** for source control
+- **ntfy** for alerts
+
+The *architecture* is provider-agnostic — only the wire-up is specific.
+If you want different providers (Vault instead of Infisical,
+DigitalOcean instead of Hetzner, etc.), tell your agent in the setup
+prompt and it'll adapt the code before provisioning. It's a real
+refactor, not a config flag — but it's the kind of refactor agents
+handle well, since the existing Infisical/Hetzner code is the working
+reference for the equivalent calls in any other provider.
+
 ## Setup
 
 This repo is designed to be deployed **by an AI agent on your behalf**.
@@ -57,6 +75,13 @@ and paste:
 > https://github.com/merijnvanes/coding-agent-vps into a working
 > directory and follow `docs/SETUP.md` step by step. Ask me for
 > anything you need.
+
+If you want non-default providers, name them in the prompt:
+
+> Please deploy coding-agent-vps for me, but using HashiCorp Vault
+> instead of Infisical and DigitalOcean instead of Hetzner. Clone
+> https://github.com/merijnvanes/coding-agent-vps, follow
+> `docs/SETUP.md`, and adapt the provider-specific code first.
 
 The agent walks you through manual steps, runs automated ones, and
 verifies as it goes. Total elapsed time on a clean setup: ~30 min,
