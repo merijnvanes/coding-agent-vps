@@ -33,18 +33,28 @@ In **your existing apps Hetzner project** (where deploys go):
 
 ### Infisical
 
-- [ ] Sign up at https://infisical.com (free tier, no card needed).
+- [ ] Sign up at https://infisical.com (free tier, no card needed). Note
+      whether your account lands on `us.infisical.com` or `eu.infisical.com`
+      — that's your **URL** for the bootstrap prompt later (look at your
+      browser address bar; `app.infisical.com` also works as an alias).
 - [ ] Create a project named `coding-agent-vps`.
+- [ ] **Note four things**, because `bootstrap.sh` will ask for all of them:
+      | What `bootstrap.sh` asks for | Where to find it in Infisical |
+      |---|---|
+      | **Project ID** | Project URL slug (the UUID part), or Project → Settings → General |
+      | **Environment slug** | Project Settings → Environments → "Slug" column. `Development` → `dev`, `Production` → `prod`, etc. The slug is what the daemon uses, NOT the display name. Pick whichever env you'll populate secrets into. |
+      | **Universal Auth Client ID** | Access Control → Identities → `agent-vps` → click into the row → Authentication Methods → Universal Auth → **Client ID** field (UUID format like `d40df785-1383-...`). **Not** the identity's name. **Not** the identity's own ID. |
+      | **Universal Auth Client Secret** | On the same Universal Auth page → Create Client Secret → TTL `0`, Max uses `0`. Shown **only once at creation** — copy to password manager immediately. |
 - [ ] Access Control → Identities → Create Identity `agent-vps` with role
-      **Viewer**. Add Universal Auth method. Generate a Client Secret with
-      no TTL and no max-uses. Save **client ID + client secret** to laptop's
-      password manager.
-- [ ] Note the **project ID** from the project URL or settings — you'll need
-      it during `bootstrap.sh`.
+      **Viewer**. Add **Universal Auth** authentication method. Generate
+      a Client Secret with TTL=0, MaxUses=0. Save both **Client ID** and
+      **Client Secret** to laptop password manager **before navigating
+      away** (the secret is unrecoverable after).
 
 ### Secrets to populate in Infisical
 
-Add the following secrets to the `prod` environment of your Infisical project:
+Add the following secrets to your chosen environment (matching the slug
+you noted above):
 
 | Name | Value | Required? |
 |---|---|---|
@@ -76,36 +86,66 @@ ssh-keygen -t ed25519 -f ~/Downloads/coding-agent-vps-key -C "coding-agent-vps@$
 
 ### Tailscale
 
-- [ ] You already have a Tailscale account on your laptop (otherwise see
-      https://tailscale.com).
-- [ ] Tailscale **ACL** (network-level): deny by default, with an explicit
-      `accept` rule from your laptop to the agent-vps. **NO rule going the
-      other direction.** Manage in https://login.tailscale.com/admin/acls.
-- [ ] Tailscale **SSH policy** (a separate section in the same ACL file):
-      Tailscale SSH is gated independently of the network ACL — you must
-      add an `ssh` rule explicitly allowing your tailnet user to log in as
-      `merijn` on the agent-vps. Example fragment:
+You already have a Tailscale account on your laptop (otherwise see
+https://tailscale.com).
 
-      ```json
-      {
-        "ssh": [
-          {
-            "action": "accept",
-            "src": ["autogroup:member"],
-            "dst": ["tag:coding-agent-vps"],
-            "users": ["merijn"]
-          }
-        ],
-        "tagOwners": {
-          "tag:coding-agent-vps": ["autogroup:member"]
-        }
-      }
-      ```
+**This part has the most common first-time stumbles.** Tailscale gates the
+agent-vps in three independent places — *all three* must be set, or the
+VPS won't join the tailnet (and you'll only find out by watching
+`/var/log/cloud-init-output.log` because `tailscale up` exits non-zero
+silently and cloud-init keeps going).
 
-      (The tag is applied at provision time via `tailscale up --advertise-tags=tag:coding-agent-vps`,
-      or you can tag it manually after first connect.) Without this, the
-      first `ssh merijn@coding-agent-vps` will be rejected even though the
-      network ACL allows it.
+#### 1. ACL — `tagOwners` must include `tag:coding-agent-vps`
+
+Open https://login.tailscale.com/admin/acls/file. Your ACL file *must*
+declare an owner for the tag, or `tailscale up --advertise-tags=tag:coding-agent-vps`
+is rejected at join time:
+
+```jsonc
+{
+  "tagOwners": {
+    "tag:coding-agent-vps": ["autogroup:admin"]   // or autogroup:member
+  }
+}
+```
+
+Merge this with any existing `tagOwners` block (don't overwrite). If you
+already have e.g. `tag:server` declared, add this as a sibling key.
+
+#### 2. ACL — `ssh` rule for the tag
+
+Same ACL file — Tailscale SSH is gated independently of the network ACL:
+
+```jsonc
+{
+  "ssh": [
+    {
+      "action": "accept",
+      "src":    ["autogroup:member"],
+      "dst":    ["tag:coding-agent-vps"],
+      "users":  ["merijn", "autogroup:nonroot"]
+    }
+  ]
+}
+```
+
+(Merge with any existing `ssh` block — you can list multiple `dst` tags
+in one rule.)
+
+#### 3. Auth-key — generate WITH the tag checked
+
+When you generate the auth-key at https://login.tailscale.com/admin/settings/keys
+(per-provision, generate fresh each time):
+
+- Reusable: **NO**
+- Ephemeral: **NO**
+- Expiration: **≤24h**
+- **Tags: tick `tag:coding-agent-vps`** ← this is the single most-missed step
+
+> Belt-and-suspenders: even though step 1 (tagOwners) alone is enough to
+> let `--advertise-tags` succeed, pre-applying the tag on the auth-key
+> means the device is tagged from the moment it joins, rather than
+> joined-then-self-tagged. Cleaner audit trail.
 
 ### Laptop
 
@@ -254,6 +294,77 @@ deleting it.
   redo the OAuth logins. Adds ~2 min. To survive a full VPS rebuild you'd
   need a separately-attached Hetzner Cloud volume, which is not in v1
   scope (REQUIREMENTS.md §6: backups are WON'T-v1).
+
+---
+
+## Troubleshooting
+
+A small catalogue of failure modes seen during real provisioning, with
+the diagnostic that pinpoints each.
+
+### VPS never appears in `tailscale status` after ~5 min
+
+Cloud-init's `tailscale up` was rejected. Two common causes:
+
+1. **`tagOwners` missing** for `tag:coding-agent-vps` in your Tailscale
+   ACL (see [Tailscale §1](#1-acl--tagowners-must-include-tagcoding-agent-vps)).
+2. **Auth-key generated without the tag** ticked (see [§3](#3-auth-key--generate-with-the-tag-checked)).
+
+To confirm before destroying anything: https://login.tailscale.com/admin/machines
+— if the VPS isn't listed at all, the join was rejected (no entry, not
+even a pending one). Recovery: fix the ACL, regenerate a tagged auth-key,
+`hcloud server delete coding-agent-vps`, re-run `provision.sh`.
+
+### `bootstrap.sh` fails with HTTP 422 from Infisical
+
+The cred-daemon got an HTTP 422 "Unprocessable Entity" from the auth
+endpoint. Almost always: **Client ID was pasted incorrectly** — typically
+the identity's *name* (e.g. `agent-vps`) instead of the Universal Auth
+**Client ID UUID** (e.g. `d40df785-1383-45df-be19-38cd847bef35`).
+
+Diagnostic:
+
+```bash
+sudo journalctl -u cred-daemon.service -n 20 --no-pager
+```
+
+Look for `curl: (22) ... error: 422`. Re-run `bootstrap.sh` and use the
+UUID from Access Control → Identities → `agent-vps` → Universal Auth.
+
+### `bootstrap.sh` fails with HTTP 404
+
+URL was pasted with a trailing slash. The daemon now strips trailing
+slashes automatically; if you hit this on an old daemon, re-run
+`bootstrap.sh` and paste the URL with no trailing slash.
+
+### Cloud-init seems stuck (no progress for 15+ min)
+
+SSH in (the merijn user is created early in cloud-init-tasks.sh) and
+check status:
+
+```bash
+sudo cloud-init status                                    # done | running | error
+sudo tail -80 /var/log/cloud-init-output.log              # see where it stopped
+pgrep -af cloud-init-tasks.sh                             # is the host-setup still running?
+pgrep -af "docker.*build"                                 # is the image build the slow step?
+```
+
+The slowest legitimate step is `docker build` of the sandbox image (~5–8
+min on a CX23). If it failed, the log shows the exact Dockerfile step.
+
+### `cloud-init status` shows `error`
+
+Cloud-init aborted at some `runcmd`/script step. After fixing whatever
+went wrong, the safest recovery is:
+
+```bash
+sudo git -C /opt/agent-vps pull                           # if the fix is upstream
+sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh      # idempotent, re-runs cleanly
+```
+
+You don't need to destroy and reprovision unless the failure was in
+cloud-init.yaml itself (Tailscale join, git clone) — `cloud-init-tasks.sh`
+is fully idempotent.
 
 ---
 
