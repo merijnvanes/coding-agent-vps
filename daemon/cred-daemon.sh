@@ -85,6 +85,16 @@ source "$BOOTSTRAP_FILE"
 [[ -n "${INFISICAL_CLIENT_ID:-}" && -n "${INFISICAL_CLIENT_SECRET:-}" ]] \
   || die "INFISICAL_CLIENT_ID or INFISICAL_CLIENT_SECRET not set"
 
+# `source` sets shell variables but doesn't export them — jq's `env.X` reads
+# the subprocess environment, so without an explicit export it sees null and
+# the auth body becomes {"clientId":null,"clientSecret":null} (→ HTTP 422).
+export INFISICAL_PROJECT_ID INFISICAL_ENV INFISICAL_URL \
+       INFISICAL_CLIENT_ID INFISICAL_CLIENT_SECRET
+
+# Normalize: trim any trailing slash on the base URL so subsequent
+# `${INFISICAL_URL}/api/...` never produces a `//api/...` 404.
+INFISICAL_URL="${INFISICAL_URL%/}"
+
 # === Ensure target directories exist with the right mode ===
 # Creds zone: 0700 — only daemon can read. Sandbox cannot reach.
 install -d -m 0700 "$CREDS_DIR"
