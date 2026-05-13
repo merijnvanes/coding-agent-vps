@@ -3,11 +3,15 @@
 #
 # Minimal entrypoint: install Tailscale, join the tailnet via the auth-key
 # (substituted by scripts/provision.sh before this file is sent to Hetzner),
-# clone the repo, then hand off to scripts/cloud-init-tasks.sh for the rest.
+# clone the repo using a read-only deploy key (also substituted by
+# provision.sh), then hand off to scripts/cloud-init-tasks.sh for the rest.
 #
-# The auth-key in user-data is the only secret Hetzner sees. It's single-use
-# with a short TTL (generated fresh per provision) — acceptable since Hetzner
-# is in the trusted-dependency set (REQUIREMENTS.md §2).
+# Two secrets in user-data — both injected by scripts/provision.sh:
+#   __TAILSCALE_AUTH_KEY__  single-use, short-TTL Tailscale auth key
+#   __DEPLOY_KEY_B64__      base64-encoded ed25519 private key (read-only
+#                           deploy key, scoped to merijnvanes/coding-agent-vps)
+# Hetzner is the only third party that ever sees these — acceptable since
+# Hetzner is in the trusted-dependency set (REQUIREMENTS.md §2).
 
 package_update: true
 package_upgrade: true
@@ -26,6 +30,38 @@ packages:
   - ufw
   - uidmap
 
+write_files:
+  # Read-only deploy key for cloning the private repo. base64 lets us keep
+  # this as a single line in the YAML template so sed substitution in
+  # provision.sh is trivial and indentation-safe.
+  - path: /root/.ssh/coding-agent-vps-deploy
+    permissions: '0600'
+    owner: root:root
+    encoding: base64
+    content: __DEPLOY_KEY_B64__
+
+  # SSH config: use the deploy key only for github.com, no agent forwarding.
+  - path: /root/.ssh/config
+    permissions: '0600'
+    owner: root:root
+    content: |
+      Host github.com
+        HostName github.com
+        User git
+        IdentityFile /root/.ssh/coding-agent-vps-deploy
+        IdentitiesOnly yes
+        UserKnownHostsFile /root/.ssh/known_hosts
+        StrictHostKeyChecking yes
+
+  # Pinned GitHub ed25519 host key (from
+  # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
+  # Avoids the TOFU window that ssh-keyscan-at-boot would open.
+  - path: /root/.ssh/known_hosts
+    permissions: '0644'
+    owner: root:root
+    content: |
+      github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+
 runcmd:
   # 1. UFW: deny incoming on every interface except tailscale0. Hetzner Cloud
   #    firewall is already deny-all from server creation (attached via
@@ -40,9 +76,11 @@ runcmd:
   - curl -fsSL https://tailscale.com/install.sh | sh
   - tailscale up --auth-key=__TAILSCALE_AUTH_KEY__ --hostname=coding-agent-vps --advertise-tags=tag:coding-agent-vps --ssh --accept-routes
 
-  # 3. Clone the repo and run the host-setup script.
+  # 3. Tighten /root/.ssh dir mode (write_files creates parent dirs but
+  #    doesn't enforce mode), then clone over SSH using the deploy key.
+  - chmod 0700 /root/.ssh
   - mkdir -p /opt/agent-vps
-  - git clone https://github.com/merijnvanes/coding-agent-vps /opt/agent-vps
+  - git clone git@github.com:merijnvanes/coding-agent-vps.git /opt/agent-vps
   - bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 
 final_message: "Cloud-init complete. SSH in via Tailscale and run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"

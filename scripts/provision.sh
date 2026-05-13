@@ -8,6 +8,8 @@
 #     coding-agent-vps-admin). Override via HCLOUD_CONTEXT env var.
 #   - Hetzner Cloud firewall `agent-vps-deny-all` exists in that project,
 #     with deny-all-inbound rules for v4 and v6.
+#   - `gh` CLI authenticated with `repo` scope (used to register the
+#     read-only deploy key for the private repo).
 #
 # Usage: ./scripts/provision.sh
 
@@ -20,6 +22,14 @@ LOCATION="${LOCATION:-fsn1}"           # Falkenstein, DE — change to nbg1, hel
 TYPE="${TYPE:-cx22}"                   # cheapest x86 (€4.49/mo)
 IMAGE="${IMAGE:-ubuntu-24.04}"
 FIREWALL="${FIREWALL:-agent-vps-deny-all}"
+
+# Repo-scoped read-only deploy key. Generated once, registered on the private
+# GitHub repo, then embedded in cloud-init user-data so the VPS can `git clone`
+# at first boot. Same trust class as the Tailscale auth-key (Hetzner sees the
+# user-data once); read-only and scoped to this one repo.
+DEPLOY_KEY_PATH="${DEPLOY_KEY_PATH:-$HOME/.ssh/coding-agent-vps-deploy}"
+DEPLOY_KEY_TITLE="coding-agent-vps deploy key (provision.sh)"
+GH_REPO="${GH_REPO:-merijnvanes/coding-agent-vps}"
 
 # Use the admin context for this run
 hcloud context use "$CONTEXT" \
@@ -36,6 +46,30 @@ if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
   fi
 fi
 
+# Ensure deploy key exists locally; generate if missing.
+mkdir -p "$(dirname "$DEPLOY_KEY_PATH")"
+chmod 0700 "$(dirname "$DEPLOY_KEY_PATH")"
+if [[ ! -f "$DEPLOY_KEY_PATH" ]]; then
+  echo "Generating deploy keypair: $DEPLOY_KEY_PATH"
+  ssh-keygen -t ed25519 -f "$DEPLOY_KEY_PATH" -N "" -C "coding-agent-vps deploy" >/dev/null
+fi
+[[ -f "${DEPLOY_KEY_PATH}.pub" ]] || { echo "ERROR: ${DEPLOY_KEY_PATH}.pub missing" >&2; exit 1; }
+
+# Register the public key as a read-only deploy key on the repo if not
+# already registered (idempotent — compares the actual key material).
+LOCAL_PUB_KEY=$(awk '{print $1, $2}' "${DEPLOY_KEY_PATH}.pub")
+if gh api "/repos/${GH_REPO}/keys" --jq '.[].key' 2>/dev/null \
+   | awk '{print $1, $2}' | grep -Fxq "$LOCAL_PUB_KEY"; then
+  echo "✓ Deploy key already registered on ${GH_REPO}"
+else
+  echo "Registering deploy key on ${GH_REPO} (read-only)..."
+  gh api -X POST "/repos/${GH_REPO}/keys" \
+    -f "title=${DEPLOY_KEY_TITLE}" \
+    -f "key=$(cat "${DEPLOY_KEY_PATH}.pub")" \
+    -F "read_only=true" >/dev/null
+  echo "✓ Registered."
+fi
+
 # Prompt for Tailscale auth-key (single-use, ≤24h TTL — generate fresh)
 echo
 echo "Generate a fresh Tailscale auth-key:"
@@ -45,10 +79,16 @@ echo
 read -rsp "Paste Tailscale auth-key (input hidden): " TAILSCALE_AUTH_KEY
 echo
 
+# Base64-encode the deploy private key (single-line — safe for sed
+# substitution into the cloud-init.yaml write_files block).
+DEPLOY_KEY_B64=$(base64 < "$DEPLOY_KEY_PATH" | tr -d '\n')
+
 # Substitute into cloud-init template
 USER_DATA=$(mktemp)
 trap 'rm -f "$USER_DATA"' EXIT
-sed "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" cloud-init.yaml > "$USER_DATA"
+sed -e "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" \
+    -e "s|__DEPLOY_KEY_B64__|${DEPLOY_KEY_B64}|g" \
+    cloud-init.yaml > "$USER_DATA"
 
 echo "Provisioning $SERVER_NAME (type=$TYPE, location=$LOCATION, firewall=$FIREWALL)..."
 hcloud server create \

@@ -112,6 +112,10 @@ ssh-keygen -t ed25519 -f ~/Downloads/coding-agent-vps-key -C "coding-agent-vps@$
 - [ ] `brew install hcloud` (if not already)
 - [ ] `hcloud context create coding-agent-vps-admin` → paste the Hetzner
       admin token when prompted.
+- [ ] `brew install gh` and `gh auth login` with `repo` scope. `provision.sh`
+      uses it to register a read-only deploy key on the private repo
+      (auto-generated at `~/.ssh/coding-agent-vps-deploy`, idempotent — the
+      same key is reused across reprovisions). No manual GitHub UI step.
 
 ### Phone
 
