@@ -199,10 +199,11 @@ It prompts for project ID, environment, URL, client ID, client secret. On
 success, it triggers an immediate credential fetch and tells you what to
 run next.
 
-Final step (as the `merijn` user):
+Final step (exit the `sudo bash bootstrap.sh` first so you're back in
+your merijn shell, then):
 
 ```bash
-sudo -u merijn -H bash -lc 'cd /opt/agent-vps && docker compose up -d'
+cd /opt/agent-vps && docker compose up -d
 ```
 
 The container starts detached. The container's entrypoint runs
@@ -210,7 +211,7 @@ The container starts detached. The container's entrypoint runs
 explicitly:
 
 ```bash
-sudo -u merijn -H bash -lc 'docker exec -it sandbox tmux attach -t main'
+docker exec -it sandbox tmux attach -t main
 ```
 
 You're now inside the tmux session in the sandbox. Log in to your AI
@@ -228,7 +229,7 @@ Detach from tmux (`Ctrl-b d`) and you're done.
 ## Day-to-day use
 
 - **Enter the sandbox**: `ssh merijn@coding-agent-vps`, then
-  `sudo -u merijn -H bash -lc 'docker exec -it sandbox tmux attach -t main'`.
+  `docker exec -it sandbox tmux attach -t main`.
 - **Run an agent**: from inside the sandbox, just run `claude` or `codex`.
 - **Persistent sessions**: tmux is the default entrypoint, so sessions
   survive SSH disconnects.
@@ -288,7 +289,7 @@ deleting it.
 - **Container rebuild** (most common — Dockerfile change, image refresh):
   Docker volumes (`sandbox-state-claude`, `sandbox-state-codex`) persist
   on the VPS's local disk. `claude login` / `codex login` not needed
-  again. Run: `sudo -u merijn -H bash -lc 'cd /opt/agent-vps && docker compose up -d --build'`
+  again. Run: `cd /opt/agent-vps && docker compose up -d --build`
 - **Full VPS rebuild** (running `scripts/provision.sh`): the existing
   server is deleted, including all local disk and Docker volumes. You
   redo the OAuth logins. Adds ~2 min. To survive a full VPS rebuild you'd
