@@ -23,6 +23,13 @@ and surface the specific symptom.
 > "done?" not "what was the value?". This is the entire architectural
 > point of the chat-orchestration / secret-locality split.
 
+> **Keep messages lean — don't preempt errors.** Most runs succeed
+> first try. Don't enumerate possible failure modes / error codes /
+> recovery steps in advance of an actual failure — it bloats the UX
+> and makes the happy path feel risky. If something does fail, refer
+> the user to [docs/USAGE.md → Troubleshooting](./USAGE.md#troubleshooting)
+> for the specific symptom — that doc has the failure modes catalogued.
+
 **If you are the human:** paste the prompt from the README into your
 agent and let it drive. Stay near the keyboard — you'll be asked to
 click through browser tabs.
@@ -542,26 +549,12 @@ prompt — **the values do not pass through you**:
 
 ### Verify
 
-If bootstrap prints `✓ Credential fetch succeeded.`, proceed.
+The script ends with `✓ Credential fetch succeeded.` on success —
+that's the only signal you need to surface; proceed to Phase 7.
 
-If it errors and points to `journalctl`:
-
-```bash
-sudo journalctl -u cred-daemon.service -n 20 --no-pager
-```
-
-- `error: 422`: Client ID was wrong (typically pasted the identity
-  *name* instead of the UUID). Re-run bootstrap with the correct value.
-- `error: 401`: Client Secret typo. Re-run.
-
-After success, verify credentials landed:
-
-```bash
-ssh <USER>@coding-agent-vps 'sudo ls /var/lib/agent-vps/agent-config/env'
-```
-
-You should see at minimum `hetzner.sh` (and any other env-export files
-matching the secrets they populated).
+If it errors, see [USAGE.md → Troubleshooting](./USAGE.md#troubleshooting)
+for the specific symptom and recovery (don't preempt those with the
+user — most runs succeed first try).
 
 ## Phase 7: Start sandbox + AI CLI logins (~5 min, interactive)
 
