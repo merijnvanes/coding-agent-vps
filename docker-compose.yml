@@ -35,10 +35,6 @@ services:
         target: /home/agent/.config/gcloud
         read_only: true
       - type: bind
-        source: /var/lib/agent-vps/agent-config/npm/npmrc
-        target: /home/agent/.npmrc
-        read_only: true
-      - type: bind
         source: /var/lib/agent-vps/agent-config/env
         target: /run/agent-env
         read_only: true

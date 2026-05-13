@@ -110,7 +110,8 @@ There is no single "credential socket protocol." Each non-SSH CLI consumes crede
 | `gcloud` | `~/.config/gcloud/application_default_credentials.json` | daemon writes to `/var/lib/agent-vps/agent-config/gcloud/application_default_credentials.json`; bind-mounted read-only into sandbox at the expected path |
 | `wrangler` | `CLOUDFLARE_API_TOKEN` env var | daemon writes `/var/lib/agent-vps/agent-config/env/cloudflare.sh`; container entrypoint sources it on shell start. Footgun: running shells keep stale value until re-source (see Daily refresh flow step 5) |
 | `hcloud` | `HCLOUD_TOKEN` env var (apps-only scope, no VPS-management) | daemon writes `/var/lib/agent-vps/agent-config/env/hetzner.sh`; same sourcing pattern as wrangler |
-| `npm` (publish) | `~/.npmrc` `_authToken` | daemon writes `/var/lib/agent-vps/agent-config/npm/npmrc`; bind-mounted read-only into sandbox as `~/.npmrc` |
+
+(npm / PyPI / Docker Hub publishing not scaffolded in v1. The pattern for any added integration matches `cloudflare-token` or `hcloud-token` — fetch from Infisical, write an env-export or config file under `agent-config/`, bind into the sandbox.)
 
 All of these except SSH put the raw bearer token somewhere the sandbox process can read at use-time. SSH via ssh-agent is the only true signing oracle (private key never enters the sandbox). For `git` operations we use SSH only; the agent does not have `gh` or any other GitHub API tooling in-sandbox — those operations happen from the laptop instead.
 
@@ -124,7 +125,7 @@ systemd timer (`cred-daemon.timer`, OnCalendar=04:00 UTC daily, Persistent=true)
 4. For each value that changed since last refresh: write to `/var/lib/agent-vps/creds/<name>` (mode 0600, owner `creds:creds`), reload the corresponding helper (e.g. `ssh-add -d <old>` + `ssh-add <new>` for SSH keys)
 5. Propagation to the sandbox depends on the credential type:
    - **SSH** (socket-served): next signing request sees the new key — no restart needed.
-   - **gcloud ADC, `~/.npmrc`** (file-read at each use): next CLI invocation reads the new value — no restart needed.
+   - **File-based creds** (e.g. gcloud ADC at `~/.config/gcloud/...`): next CLI invocation reads the new value — no restart needed.
    - **`CLOUDFLARE_API_TOKEN`, `HCLOUD_TOKEN`** (env vars sourced at shell start): running tmux sessions keep stale values until the shell re-sources its env-export or is restarted. Document this as a known footgun; users should `exec $SHELL` or detach/reattach tmux after a known rotation.
 6. On Infisical authentication or fetch failure: publish to ntfy topic
 
@@ -162,12 +163,9 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
   agent-config/                                # per-CLI config files; bind-mounted read-only into the sandbox
     gcloud/
       application_default_credentials.json  0644  creds:creds  # → /home/agent/.config/gcloud/...
-    npm/
-      npmrc                                 0644  creds:creds  # → /home/agent/.npmrc
     env/
       cloudflare.sh                         0644  creds:creds  # sourced by entrypoint → CLOUDFLARE_API_TOKEN
       hetzner.sh                            0644  creds:creds  # sourced by entrypoint → HCLOUD_TOKEN (apps-only)
-      pypi.sh                               0644  creds:creds  # sourced by entrypoint → UV_PUBLISH_TOKEN, TWINE_*
   sockets/                                     # mounted into sandbox; 0755 dir, 0666 socket files
     ssh-agent.sock         0666  creds:creds   # raw ssh-agent — cred-daemon uses this directly
     ssh-agent-bridge.sock  0666  creds:creds   # socat relay — sandbox uses this (UID-namespace bridge)
@@ -192,7 +190,6 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 **Sandbox mounts (rootless Docker):**
 - `/var/lib/agent-vps/sockets/` → `/run/sockets/` (socket mode 0666; the sandbox connects to `ssh-agent-bridge.sock`, not the raw `ssh-agent.sock` — see daemon/ssh-agent-bridge.service for why)
 - `/var/lib/agent-vps/agent-config/gcloud/` → `/home/agent/.config/gcloud/` (read-only)
-- `/var/lib/agent-vps/agent-config/npm/npmrc` → `/home/agent/.npmrc` (read-only)
 - `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; `/etc/profile.d/agent-env.sh` sources `*.sh` on shell start to set env-var creds)
 - Named volumes (above) for `~/.claude`, `~/.codex`, `~/.local/state/agent-state`
 - `/srv/dev/projects/` → `/work` (rw)

@@ -250,13 +250,16 @@ Secrets → New Secret for each:
 | `hcloud-token` | Yes | The apps-project token from Phase 1 step 4 |
 | `cloudflare-token` | If they use Cloudflare | Cloudflare → My Profile → API Tokens |
 | `gcp-sa-key` | If they use GCP | Existing service-account key JSON, entire content |
-| `npm-token` | Optional | npm → Profile → Access Tokens |
-| `pypi-token` | Optional | PyPI → Account Settings → API Tokens |
 | `ntfy-topic` | Optional | `openssl rand -hex 8` — only needed if the user wants push notifications for credential failures (and installed the ntfy app earlier) |
 
 Tell the user: skip secrets they don't need. The cred-daemon silently
 skips missing secrets; they can add more later by populating the
 secret and running `sudo systemctl start cred-daemon` on the VPS.
+
+If they specifically need to publish to npm / PyPI / Docker Hub from
+the sandbox, that's not scaffolded in v1 — they'd add their own
+routing to `daemon/cred-daemon.sh` (pattern matches `cloudflare-token`
+or `hcloud-token`).
 
 ### Automated steps (you, the agent)
 

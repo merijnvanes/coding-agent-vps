@@ -51,17 +51,10 @@ install -d -m 0700 -o creds  -g creds  /var/lib/agent-vps/creds
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/env
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/gcloud
-install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/npm
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/sockets
 
-# Pre-create the npmrc as an empty file so docker-compose's file bind mount
-# has a source to bind even when npm-token isn't in Infisical yet. Docker
-# would otherwise create a directory at this path → npm sees `~/.npmrc` as a
-# directory and breaks.
-install -m 0644 -o creds -g creds /dev/null /var/lib/agent-vps/agent-config/npm/npmrc
-
 # Project workspace. Mode 0777 so the rootless-Docker-mapped sandbox UID
-# (host UID merijn_subuid_base + 999) can write here in addition to host
+# (host UID dev_subuid_base + 999) can write here in addition to host
 # dev. On this single-user box the practical access set is unchanged
 # (only dev and rootless containers ever access this dir).
 install -d -m 0777 -o dev -g dev /srv/dev

@@ -164,10 +164,10 @@ fi
 #   gcp-sa-key         → CONFIG_DIR/gcloud/application_default_credentials.json (0644)
 #   cloudflare-token   → CONFIG_DIR/env/cloudflare.sh   (0644, env-export)
 #   hcloud-token       → CONFIG_DIR/env/hetzner.sh       (0644, env-export)
-#   npm-token          → CONFIG_DIR/npm/npmrc            (0644)
-#   pypi-token         → CONFIG_DIR/env/pypi.sh          (0644, env-export for uv/pip)
 #   ntfy-topic         → CREDS_DIR/ntfy-topic            (0600)
-# (docker-hub-token deferred — see comment below the integration block)
+# (Publishing tokens — npm/PyPI/Docker Hub — intentionally NOT scaffolded in v1.
+#  The 0.1% of users who actually publish from the agent VPS can wire it up
+#  themselves — pattern matches cloudflare-token / hcloud-token.)
 
 # --- github-ssh-key (private key + load into ssh-agent) ---
 # Validate the new key BEFORE clearing the agent. If validation fails, keep
@@ -213,28 +213,6 @@ if val=$(secret_value hcloud-token) && [[ -n "$val" ]]; then
   atomic_write "$CONFIG_DIR/env/hetzner.sh" 0644 \
     "export HCLOUD_TOKEN=$(quote "$val")"
 fi
-
-# --- npm-token (.npmrc, file-read at each npm/pnpm invocation) ---
-if val=$(secret_value npm-token) && [[ -n "$val" ]]; then
-  log "writing npm .npmrc"
-  atomic_write "$CONFIG_DIR/npm/npmrc" 0644 \
-    "//registry.npmjs.org/:_authToken=${val}"
-fi
-
-# --- pypi-token (env-export for uv publish / twine) ---
-if val=$(secret_value pypi-token) && [[ -n "$val" ]]; then
-  log "writing pypi env-export"
-  atomic_write "$CONFIG_DIR/env/pypi.sh" 0644 \
-"export UV_PUBLISH_TOKEN=$(quote "$val")
-export TWINE_USERNAME=__token__
-export TWINE_PASSWORD=$(quote "$val")"
-fi
-
-# Docker Hub publishing intentionally NOT scaffolded in v1:
-# the Docker CLI doesn't consume a single env var — `docker login` needs a
-# username + password pair, and pushing typically expects auth in ~/.docker/
-# config.json. Adding it cleanly requires a username secret too plus a
-# pre-exec login step. Defer until there's an actual publish workflow.
 
 # --- ntfy-topic (creds zone; only the alert script reads this) ---
 if val=$(secret_value ntfy-topic) && [[ -n "$val" ]]; then
