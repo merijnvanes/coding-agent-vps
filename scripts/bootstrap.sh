@@ -28,20 +28,26 @@ CLIENT_ID=$(ask      "Infisical Universal Auth client ID")
 CLIENT_SECRET=$(ask_secret "Infisical Universal Auth client secret (input hidden)")
 echo
 
+# Write a KEY=VALUE line with the value shell-quoted via `printf %q`, so
+# the resulting file is safe for `source` to evaluate regardless of what
+# characters the user pasted (spaces, $, `, ", \, etc.). Without this,
+# a value containing `$` or `` ` `` would be expanded at source time.
+emit_kv() { printf '%s=%q\n' "$1" "$2"; }
+
 # --- /etc/agent-vps/config.env (non-secret) ---
-install -m 0644 -o root -g root /dev/stdin "$CONFIG_FILE" <<EOF
-# coding-agent-vps cred-daemon configuration
-# Re-run scripts/bootstrap.sh to update.
-INFISICAL_PROJECT_ID=$PROJECT_ID
-INFISICAL_ENV=$ENV
-INFISICAL_URL=$URL
-EOF
+{
+  echo "# coding-agent-vps cred-daemon configuration"
+  echo "# Re-run scripts/bootstrap.sh to update."
+  emit_kv INFISICAL_PROJECT_ID "$PROJECT_ID"
+  emit_kv INFISICAL_ENV         "$ENV"
+  emit_kv INFISICAL_URL         "$URL"
+} | install -m 0644 -o root -g root /dev/stdin "$CONFIG_FILE"
 
 # --- /etc/agent-vps/infisical-uauth (bootstrap secret, creds-only) ---
-install -m 0600 -o creds -g creds /dev/stdin "$BOOTSTRAP_FILE" <<EOF
-INFISICAL_CLIENT_ID=$CLIENT_ID
-INFISICAL_CLIENT_SECRET=$CLIENT_SECRET
-EOF
+{
+  emit_kv INFISICAL_CLIENT_ID     "$CLIENT_ID"
+  emit_kv INFISICAL_CLIENT_SECRET "$CLIENT_SECRET"
+} | install -m 0600 -o creds -g creds /dev/stdin "$BOOTSTRAP_FILE"
 
 # --- Run the daemon once ---
 echo "Running first credential fetch from Infisical..."
