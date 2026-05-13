@@ -14,61 +14,29 @@ Single-developer setup. ~€5/month.
 
 ## Why
 
-Running an AI coding agent on your laptop gives it access to anything
-your shell can reach: SSH keys, every file you can read, browser
-cookies, your local environment. Running it on a remote, disposable
-VPS gives a few specific properties you can't get locally:
+A local AI agent can reach anything your shell can: SSH keys, every
+file you can read, browser cookies, your environment. Running it on
+a remote, disposable VPS bounds the blast radius:
 
-- The agent runs in a rootless Docker sandbox on the VPS — bind
-  mounts expose only the per-CLI credential helpers and the project
-  workspace, not the raw key material in the credential daemon's
-  files. Rootless Docker's user-namespace remapping bounds what a
-  container-escape would reach on the host (a kernel sandbox escape
-  is still in scope as a residual; see [SECURITY.md](./SECURITY.md)).
-- A compromised agent can't reach your laptop and can't access its own
-  VPS. The Hetzner admin token (the kill switch) lives only on your
-  laptop, never on the VPS. `hcloud server delete coding-agent-vps`
-  always works.
-- Credentials (GitHub SSH key, GCP service account, Hetzner apps
-  token, etc.) come from Infisical at runtime. They aren't baked into
-  the Docker image and they aren't in your shell's environment except
-  briefly inside the running sandbox.
+- Rootless Docker sandbox — bind mounts expose only the credential
+  helpers and the workspace, not raw key material. (Kernel escape is
+  a residual; see [SECURITY.md](./SECURITY.md).)
+- A compromised agent can't reach your laptop or delete its own VPS.
+  The Hetzner kill switch lives only on your laptop:
+  `hcloud server delete coding-agent-vps` always works.
+- Credentials come from Infisical at runtime — not in the image, not
+  in your shell environment.
 
-### Tradeoffs
+**Tradeoffs:** ~€5/mo, ~30 min one-time setup, keystroke latency to
+Frankfurt, and a new operating model (SSH + tmux + docker exec).
 
-- ~€5/mo for the VPS, free tier for Infisical and Tailscale.
-- ~30 min of one-time external-service setup across Hetzner Cloud,
-  Infisical, Tailscale, and GitHub.
-- Latency on every keystroke (round-trip to Frankfurt or whichever
-  Hetzner location you provision).
-- A new operating model: SSH + tmux + docker exec instead of native
-  local execution.
+**Worth it if** your agent will touch production, sensitive repos, or
+credentials you care about — and you'd otherwise run it on the same
+laptop you browse on. A throwaway local VM may suffice otherwise.
 
-### When this is worth it
-
-You'd otherwise run an AI agent on the same laptop you browse the web
-on, *and* the agent will touch production systems, sensitive repos,
-or credentials whose blast radius you care about bounding. If you'd
-just run the agent in a throwaway local VM anyway, this is probably
-over-engineering for you.
-
-### Template — providers are swappable
-
-This repo is a working template. The defaults are concrete choices:
-
-- **Hetzner Cloud** for the VPS
-- **Infisical** for the credential store
-- **Tailscale** for network access + SSH
-- **GitHub** for source control
-- **ntfy** for alerts
-
-The *architecture* is provider-agnostic — only the wire-up is specific.
-If you want different providers (Vault instead of Infisical,
-DigitalOcean instead of Hetzner, etc.), tell your agent in the setup
-prompt and it'll adapt the code before provisioning. It's a real
-refactor, not a config flag — but it's the kind of refactor agents
-handle well, since the existing Infisical/Hetzner code is the working
-reference for the equivalent calls in any other provider.
+**Providers are swappable.** Defaults are Hetzner, Infisical, Tailscale,
+GitHub, and ntfy. The architecture is provider-agnostic — name
+alternatives in the setup prompt and the agent adapts the code first.
 
 ## Setup
 
