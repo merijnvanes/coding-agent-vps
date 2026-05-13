@@ -43,9 +43,26 @@ section below. The remaining phases assume the defaults.
 ### If the user picks one or more alternatives
 
 You need to refactor the code BEFORE running `provision.sh`. This is
-not a config-flag swap — it's modifying the provider-specific code in
-the files listed above. The high-level shape of each integration is
-the same; only the concrete API calls / CLIs / config syntax differ.
+**not a config-flag swap** — it's modifying the provider-specific code
+in the files listed above. Rough effort, per swap:
+
+- **Cloud provider**: 30–60 min. Mostly mechanical — replace `hcloud`
+  CLI calls with `doctl` / `linode-cli` / etc.
+- **Secret store**: 1–2 hours. The largest swap. `daemon/cred-daemon.sh`
+  (~245 lines) couples auth + fetch + per-secret routing into one
+  script. You'll rewrite the auth flow (different login endpoint,
+  different bootstrap credential shape — Vault AppRole, AWS IAM, etc.)
+  and the secrets-fetch endpoint while preserving the per-secret
+  routing logic.
+- **Network access** (Tailscale alternative): 30 min. Replace the
+  install + `tailscale up` block in `cloud-init.yaml` and rewrite
+  Phase 3 of this guide.
+- **Git host**: 15–30 min. Mostly clone URL + host-key pin + deploy-
+  key API.
+- **Alerts**: 10 min. Single file, single function.
+
+The high-level shape of each integration is the same; only the
+concrete API calls / CLIs / config syntax differ.
 
 Walk through the refactor in this order, with the user's confirmation
 on each block:
