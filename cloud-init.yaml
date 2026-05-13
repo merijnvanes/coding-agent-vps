@@ -9,7 +9,9 @@
 # Two secrets in user-data — both injected by scripts/provision.sh:
 #   __TAILSCALE_AUTH_KEY__  single-use, short-TTL Tailscale auth key
 #   __DEPLOY_KEY_B64__      base64-encoded ed25519 private key (read-only
-#                           deploy key, scoped to merijnvanes/coding-agent-vps)
+#                           deploy key, scoped to the single repo named in
+#                           __GH_REPO__ below — auto-detected from git origin)
+#   __GH_REPO__             owner/repo of this checkout (e.g. user/coding-agent-vps)
 # Hetzner is the only third party that ever sees these — acceptable since
 # Hetzner is in the trusted-dependency set (docs/REQUIREMENTS.md §2).
 

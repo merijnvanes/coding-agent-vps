@@ -41,14 +41,21 @@ if [[ -z "${GH_REPO:-}" ]]; then
     echo "Set GH_REPO=owner/repo manually, or push this checkout to GitHub first." >&2
     exit 1
   }
-  GH_REPO=$(printf '%s' "$ORIGIN_URL" \
-    | sed -nE 's|^(https://github\.com/|git@github\.com:)([^/]+/[^/.]+)(\.git)?$|\2|p')
-  [[ -n "$GH_REPO" ]] || {
+  # Strip protocol/host prefix and .git suffix using bash parameter expansion
+  # (sed with `|` as delimiter conflicted with the `|` in (https://...|git@...)
+  # alternation; bash param expansion sidesteps the issue and handles repos
+  # with dots in the name).
+  gh_path="${ORIGIN_URL#https://github.com/}"
+  gh_path="${gh_path#git@github.com:}"
+  gh_path="${gh_path%.git}"
+  if [[ "$gh_path" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    GH_REPO="$gh_path"
+    echo "Using GH_REPO=$GH_REPO (auto-detected from git origin)"
+  else
     echo "ERROR: couldn't parse owner/repo from origin URL: $ORIGIN_URL" >&2
     echo "Set GH_REPO=owner/repo manually." >&2
     exit 1
-  }
-  echo "Using GH_REPO=$GH_REPO (auto-detected from git origin)"
+  fi
 fi
 
 # Use the admin context for this run

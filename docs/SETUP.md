@@ -269,8 +269,11 @@ ACL is one of two shapes:
   This rule MUST go (otherwise the VPS→laptop direction stays open
   and the explicit rule below is shadowed).
 - **Customized ACL** with multiple rules: confirm there is no rule
-  with `"src": ["tag:coding-agent-vps"]` or `"src": ["*"]` that would
-  let traffic flow *from* the VPS.
+  whose `src` would include the VPS. Patterns to watch for:
+  `["*"]`, `["tag:coding-agent-vps"]`, `["autogroup:tagged"]` (matches
+  every tagged device including this one), or any group/IP set that
+  the VPS belongs to. Any of these would let traffic flow *from* the
+  VPS and defeat the asymmetry.
 
 Have the user MERGE these blocks into their ACL (replacing any
 catch-all `*→*` rule):
@@ -292,12 +295,17 @@ catch-all `*→*` rule):
   },
 
   // Tailscale SSH is gated independently of the network ACL above.
+  // `users` lists exactly which SSH user the connecting member is
+  // allowed to log in as on the VPS — keep it tight: just the one
+  // username from earlier. (Tailscale's own docs warn against pairing
+  // `autogroup:nonroot` with a tagged dst — it lets the source SSH as
+  // any non-root user on that host.)
   "ssh": [
     {
       "action": "accept",
       "src":    ["autogroup:member"],
       "dst":    ["tag:coding-agent-vps"],
-      "users":  ["<USER>", "autogroup:nonroot"]
+      "users":  ["<USER>"]
     }
   ]
 }

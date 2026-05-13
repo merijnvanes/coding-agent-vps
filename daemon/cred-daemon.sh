@@ -32,7 +32,7 @@ ALERTS_SCRIPT="/opt/agent-vps/alerts/ntfy.sh"
 
 # Defaults if not overridden by config.env
 INFISICAL_URL="${INFISICAL_URL:-https://us.infisical.com}"
-INFISICAL_ENV="${INFISICAL_ENV:-prod}"
+INFISICAL_ENV="${INFISICAL_ENV:-dev}"
 
 # === Helpers ===
 log()   { printf '[%s] %s\n' "$(date -Iseconds)" "$*" >&2; }
