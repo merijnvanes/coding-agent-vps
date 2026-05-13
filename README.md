@@ -54,10 +54,6 @@ If you want non-default providers, name them in the prompt:
 > https://github.com/merijnvanes/coding-agent-vps, follow
 > `docs/SETUP.md`, and adapt the provider-specific code first.
 
-The agent walks you through manual steps, runs automated ones, and
-verifies as it goes. Total elapsed time on a clean setup: ~30 min,
-mostly waiting for cloud-init and the sandbox image build.
-
 ## After setup, day-to-day
 
 ```bash
