@@ -159,7 +159,7 @@ Day-1 contents of the sandbox image:
 
 ### Cost
 
-- **MUST** — Total monthly cost ≤ €10. Current baseline: Hetzner CX22 (~€4.49) + Infisical free tier (€0) ≈ **€4.49/mo**, well under cap.
+- **MUST** — Total monthly cost ≤ €10. Current baseline: Hetzner CX23 (~€4.50-5) + Infisical free tier (€0) ≈ **~€5/mo**, well under cap. (CX22 — the original cheapest 4GB option at €4.49 — was retired by Hetzner; CX23 is the same-spec successor.)
 
 ### Maintenance
 

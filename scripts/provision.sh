@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."   # repo root
 CONTEXT="${HCLOUD_CONTEXT:-coding-agent-vps-admin}"
 SERVER_NAME="${SERVER_NAME:-coding-agent-vps}"
 LOCATION="${LOCATION:-fsn1}"           # Falkenstein, DE — change to nbg1, hel1, ash, etc.
-TYPE="${TYPE:-cx22}"                   # cheapest x86 (€4.49/mo)
+TYPE="${TYPE:-cx23}"                   # 2 vCPU / 4GB / 40GB shared x86 (~€4.50-5/mo, cx22 successor)
 IMAGE="${IMAGE:-ubuntu-24.04}"
 FIREWALL="${FIREWALL:-agent-vps-deny-all}"
 

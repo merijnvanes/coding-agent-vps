@@ -2,7 +2,7 @@
 
 A Hetzner VPS for running AI coding CLIs (Claude Code, Codex) inside a
 sandboxed Docker container with credentials held in a separate trust zone
-and fetched from Infisical. Single-developer setup, ~€4.49/month.
+and fetched from Infisical. Single-developer setup, ~€5/month.
 
 The design — what we're building and why — lives in [REQUIREMENTS.md](./REQUIREMENTS.md)
 and [ARCHITECTURE.md](./ARCHITECTURE.md). This README is the operational
