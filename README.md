@@ -19,9 +19,12 @@ your shell can reach: SSH keys, every file you can read, browser
 cookies, your local environment. Running it on a remote, disposable
 VPS gives a few specific properties you can't get locally:
 
-- The agent runs in a rootless Docker sandbox on the VPS. It can't
-  read the credential daemon's files directly and can't break out to
-  the host filesystem.
+- The agent runs in a rootless Docker sandbox on the VPS — bind
+  mounts expose only the per-CLI credential helpers and the project
+  workspace, not the raw key material in the credential daemon's
+  files. Rootless Docker's user-namespace remapping bounds what a
+  container-escape would reach on the host (a kernel sandbox escape
+  is still in scope as a residual; see [SECURITY.md](./SECURITY.md)).
 - A compromised agent can't reach your laptop and can't access its own
   VPS. The Hetzner admin token (the kill switch) lives only on your
   laptop, never on the VPS. `hcloud server delete coding-agent-vps`
