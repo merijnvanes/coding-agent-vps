@@ -39,11 +39,6 @@ alternatives in the setup prompt and the agent adapts the code first.
 > [!WARNING]
 > Always audit third-party code before installing.
 
-This repo is designed to be deployed **by an AI agent on your behalf**.
-The setup involves several web UIs (Hetzner, Infisical, Tailscale,
-GitHub) — having the agent walk you through that flow is materially
-faster than reading through it yourself.
-
 Open a fresh AI coding agent session (Claude Code, Codex, or similar)
 and paste:
 
