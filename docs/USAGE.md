@@ -219,10 +219,17 @@ Infisical and re-paste the full PEM block.
 
 ### Inside the sandbox: `claude` or `codex` says "native binary not installed"
 
-The sandbox image was built before commit `1dbc5a3` (the `--allow-build`
-fix for pnpm 10+'s default-deny on install scripts). Rebuild:
+The sandbox image was built with a pnpm version that blocked
+postinstall scripts (pnpm 10+ default-denies them as supply-chain
+hardening). The Dockerfile in current `main` whitelists the native-
+binary CLIs explicitly with `pnpm add -g --allow-build=...` — so a
+fresh rebuild from the latest source picks up the working install:
 
 ```bash
 ssh <user>@coding-agent-vps
 cd /opt/agent-vps && git pull && docker compose up -d --build
 ```
+
+If the error persists after rebuild, check that the Dockerfile in the
+cloned tree includes `--allow-build=@anthropic-ai/claude-code` (and
+similar for codex/wrangler) on the `pnpm add -g` lines.
