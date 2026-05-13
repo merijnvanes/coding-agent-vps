@@ -105,9 +105,15 @@ RUN printf '\n[ -r /etc/profile.d/agent-env.sh ] && . /etc/profile.d/agent-env.s
       >> /etc/bash.bashrc
 ENV BASH_ENV=/etc/profile.d/agent-env.sh
 
-# tmux: new windows use a bash login shell so /etc/profile.d/agent-env.sh
-# is re-sourced, picking up rotated env values without container restart.
-RUN printf 'set-option -g default-command "/bin/bash -l"\n' >> /etc/tmux.conf
+# tmux:
+#  - new windows use a bash login shell so /etc/profile.d/agent-env.sh
+#    is re-sourced, picking up rotated env values without container restart
+#  - mouse on: scroll wheel scrolls the scrollback buffer directly
+#    (hold Option/Shift to make selections bypass tmux for terminal-native copy)
+RUN printf '%s\n' \
+      'set-option -g default-command "/bin/bash -l"' \
+      'set -g mouse on' \
+      >> /etc/tmux.conf
 
 # Known limitation, documented for the user: `docker exec sandbox <binary>`
 # (running a binary directly, no shell) bypasses all of the above. The
