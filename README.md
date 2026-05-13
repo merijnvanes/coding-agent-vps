@@ -6,11 +6,8 @@ fetched at runtime — never in your repo or shell environment.
 
 Single-developer setup. ~€5/month.
 
-> ⚠️ **Experimental, unaudited, single-developer template.** This is
-> a personal-use template that one developer iterates on. It has not
-> been third-party-reviewed and the security claims are best-effort,
-> not guarantees. See [SECURITY.md](./SECURITY.md) for the
-> disclosure policy and threat-model residuals.
+> [!WARNING]
+> Experimental, unaudited, single-developer template. Security claims are best-effort, not guarantees. See [SECURITY.md](./SECURITY.md).
 
 ## Why
 
