@@ -14,7 +14,7 @@ Single-developer setup. ~€5/month.
 
 ## Why
 
-A local AI agent can reach anything your shell can: SSH keys, every
+A local AI agent can reach anything your shell can: keys, every
 file you can read, browser cookies, your environment. Running it on
 a remote, disposable VPS bounds the blast radius:
 
@@ -28,11 +28,7 @@ a remote, disposable VPS bounds the blast radius:
   in your shell environment.
 
 **Tradeoffs:** ~€5/mo, ~30 min one-time setup, keystroke latency to
-Frankfurt, and a new operating model (SSH + tmux + docker exec).
-
-**Worth it if** your agent will touch production, sensitive repos, or
-credentials you care about — and you'd otherwise run it on the same
-laptop you browse on. A throwaway local VM may suffice otherwise.
+the VPS, and a new operating model (SSH + tmux + docker exec).
 
 **Providers are swappable.** Defaults are Hetzner, Infisical, Tailscale,
 GitHub, and ntfy. The architecture is provider-agnostic — name
