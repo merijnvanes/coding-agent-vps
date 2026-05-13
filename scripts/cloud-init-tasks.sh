@@ -87,6 +87,21 @@ systemctl disable --now docker.service docker.socket 2>/dev/null || true
 # Allow merijn's user systemd units to run without an active login session.
 loginctl enable-linger merijn
 
+# Start merijn's user systemd manager NOW (linger only takes effect on the
+# next boot; we need it in this boot too). Without this,
+# dockerd-rootless-setuptool.sh detects no systemd, falls back to "manual
+# mode" without installing the docker.service user unit, and the next
+# `systemctl --user enable --now docker` fails.
+MERIJN_UID=$(id -u merijn)
+systemctl start "user@${MERIJN_UID}.service"
+# Wait for the user systemd private socket to appear (up to 30s).
+for _ in $(seq 1 30); do
+  [[ -S "/run/user/${MERIJN_UID}/systemd/private" ]] && break
+  sleep 1
+done
+[[ -S "/run/user/${MERIJN_UID}/systemd/private" ]] \
+  || { log "ERROR: merijn user systemd did not start within 30s"; exit 1; }
+
 # Configure rootless Docker for merijn (idempotent: re-running is harmless).
 log "configuring rootless Docker for merijn"
 sudo -u merijn -H XDG_RUNTIME_DIR=/run/user/$(id -u merijn) \

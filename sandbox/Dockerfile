@@ -32,10 +32,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && corepack enable \
     && corepack prepare pnpm@latest --activate
 
-# pnpm global bin dir on PATH so `pnpm add -g X` produces invokable commands
+# pnpm global bin dir on PATH so `pnpm add -g X` produces invokable commands.
+# pnpm 9+ installs global binaries to $PNPM_HOME/bin and errors out at
+# install time if that exact path isn't on PATH (it used to be a warning).
 ENV PNPM_HOME=/usr/local/pnpm
-ENV PATH="${PNPM_HOME}:${PATH}"
-RUN mkdir -p "${PNPM_HOME}"
+ENV PATH="${PNPM_HOME}/bin:${PATH}"
+RUN mkdir -p "${PNPM_HOME}/bin"
 
 # /etc/npmrc — read by both pnpm and npm. Sets minimum-release-age (REQUIREMENTS.md §5):
 #   pnpm 11+ reads `minimum-release-age` in minutes  (10080 = 7d)
