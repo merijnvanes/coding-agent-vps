@@ -407,13 +407,17 @@ tailnet, built the sandbox image, and installed systemd units.
 
 ### Automated steps (you, the agent)
 
-Ensure `gh` is installed and authed (used to register the read-only
-deploy key for the repo clone):
+`provision.sh` auto-detects whether the repo is public or private:
 
-```bash
-brew install gh || sudo apt-get install -y gh
-gh auth status || gh auth login   # browser flow, needs `repo` scope
-```
+- **Public repo**: cloud-init clones via HTTPS, no auth needed.
+  No `gh` CLI required.
+- **Private repo (i.e., a private fork)**: cloud-init clones via SSH
+  using a read-only deploy key the script registers automatically.
+  Requires `gh` installed and authed with `repo` scope:
+  ```bash
+  brew install gh || sudo apt-get install -y gh
+  gh auth status || gh auth login
+  ```
 
 Run provisioning:
 
@@ -422,12 +426,16 @@ Run provisioning:
 ```
 
 The script will:
-1. Generate (if missing) a read-only ed25519 deploy key at
-   `~/.ssh/coding-agent-vps-deploy` and register it on the repo via
-   `gh api` (idempotent).
-2. Prompt for the Tailscale auth-key. **Ask the user to paste it** at
+1. Detect repo visibility (public/private) and pick the clone strategy.
+2. **For private repos only**: generate (if missing) a read-only ed25519
+   deploy key at `~/.ssh/coding-agent-vps-deploy` and register it on
+   the repo via `gh api` (idempotent).
+3. Prompt for the Tailscale auth-key. **Ask the user to paste it** at
    that prompt (input is hidden).
-3. Create the Hetzner CX23 VPS with the deny-all firewall attached at
+4. Warn if the local checkout has unpushed commits or working-tree
+   changes (cloud-init clones from origin, so local-only changes
+   wouldn't reach the VPS).
+5. Create the Hetzner CX23 VPS with the deny-all firewall attached at
    creation time.
 
 After `provision.sh` returns, cloud-init runs in the background for

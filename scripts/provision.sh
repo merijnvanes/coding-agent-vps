@@ -73,28 +73,71 @@ if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
   fi
 fi
 
-# Ensure deploy key exists locally; generate if missing.
-mkdir -p "$(dirname "$DEPLOY_KEY_PATH")"
-chmod 0700 "$(dirname "$DEPLOY_KEY_PATH")"
-if [[ ! -f "$DEPLOY_KEY_PATH" ]]; then
-  echo "Generating deploy keypair: $DEPLOY_KEY_PATH"
-  ssh-keygen -t ed25519 -f "$DEPLOY_KEY_PATH" -N "" -C "coding-agent-vps deploy" >/dev/null
-fi
-[[ -f "${DEPLOY_KEY_PATH}.pub" ]] || { echo "ERROR: ${DEPLOY_KEY_PATH}.pub missing" >&2; exit 1; }
-
-# Register the public key as a read-only deploy key on the repo if not
-# already registered (idempotent — compares the actual key material).
-LOCAL_PUB_KEY=$(awk '{print $1, $2}' "${DEPLOY_KEY_PATH}.pub")
-if gh api "/repos/${GH_REPO}/keys" --jq '.[].key' 2>/dev/null \
-   | awk '{print $1, $2}' | grep -Fxq "$LOCAL_PUB_KEY"; then
-  echo "✓ Deploy key already registered on ${GH_REPO}"
+# Detect whether the repo is public or private — drives the clone strategy.
+# Public: cloud-init clones via HTTPS, no auth, no deploy key needed.
+# Private: cloud-init clones via SSH using a read-only deploy key registered
+#          on the repo via `gh api`. The deploy-key flow requires gh CLI
+#          auth + admin access on $GH_REPO (i.e., it's your fork).
+echo "Checking visibility of ${GH_REPO}..."
+if curl -fsSL -o /dev/null --max-time 10 "https://github.com/${GH_REPO}" 2>/dev/null; then
+  REPO_VISIBILITY="public"
+  CLONE_URL="https://github.com/${GH_REPO}.git"
+  echo "✓ ${GH_REPO} is public — cloud-init will clone via HTTPS (no deploy key)."
 else
-  echo "Registering deploy key on ${GH_REPO} (read-only)..."
-  gh api -X POST "/repos/${GH_REPO}/keys" \
-    -f "title=${DEPLOY_KEY_TITLE}" \
-    -f "key=$(cat "${DEPLOY_KEY_PATH}.pub")" \
-    -F "read_only=true" >/dev/null
-  echo "✓ Registered."
+  REPO_VISIBILITY="private"
+  CLONE_URL="git@github.com:${GH_REPO}.git"
+  echo "✓ ${GH_REPO} appears private — will provision a read-only deploy key for SSH clone."
+fi
+
+# Warn if there are local commits or working-tree changes not on origin —
+# cloud-init clones from origin, so unpushed work won't reach the VPS.
+LOCAL_AHEAD=$(git rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0)
+WORKING_DIRTY=$(git status --porcelain 2>/dev/null | head -c1)
+if [[ "$LOCAL_AHEAD" -gt 0 || -n "$WORKING_DIRTY" ]]; then
+  echo
+  echo "WARNING: this checkout has unpushed or uncommitted changes:"
+  [[ "$LOCAL_AHEAD" -gt 0 ]] && echo "  - ${LOCAL_AHEAD} commit(s) ahead of origin/$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+  [[ -n "$WORKING_DIRTY" ]]   && echo "  - uncommitted changes in the working tree"
+  echo "Cloud-init clones from origin, so these changes will NOT reach the VPS."
+  echo "Push your changes first (and rerun) if you intend them to apply."
+  echo
+  read -rp "Continue anyway? (yes/N): " confirm
+  [[ "$confirm" == "yes" ]] || { echo "Aborted." >&2; exit 1; }
+fi
+
+# Deploy-key flow — only needed when the repo is private.
+# When public, substitute a benign 1-byte placeholder so cloud-init's
+# base64 decoder doesn't trip on null/empty content (some versions don't
+# handle that cleanly; the resulting file is unused either way).
+DEPLOY_KEY_B64="IA=="
+if [[ "$REPO_VISIBILITY" == "private" ]]; then
+  # Ensure deploy key exists locally; generate if missing.
+  mkdir -p "$(dirname "$DEPLOY_KEY_PATH")"
+  chmod 0700 "$(dirname "$DEPLOY_KEY_PATH")"
+  if [[ ! -f "$DEPLOY_KEY_PATH" ]]; then
+    echo "Generating deploy keypair: $DEPLOY_KEY_PATH"
+    ssh-keygen -t ed25519 -f "$DEPLOY_KEY_PATH" -N "" -C "coding-agent-vps deploy" >/dev/null
+  fi
+  [[ -f "${DEPLOY_KEY_PATH}.pub" ]] || { echo "ERROR: ${DEPLOY_KEY_PATH}.pub missing" >&2; exit 1; }
+
+  # Register the public key as a read-only deploy key on the repo if not
+  # already registered (idempotent — compares the actual key material).
+  LOCAL_PUB_KEY=$(awk '{print $1, $2}' "${DEPLOY_KEY_PATH}.pub")
+  if gh api "/repos/${GH_REPO}/keys" --jq '.[].key' 2>/dev/null \
+     | awk '{print $1, $2}' | grep -Fxq "$LOCAL_PUB_KEY"; then
+    echo "✓ Deploy key already registered on ${GH_REPO}"
+  else
+    echo "Registering deploy key on ${GH_REPO} (read-only)..."
+    gh api -X POST "/repos/${GH_REPO}/keys" \
+      -f "title=${DEPLOY_KEY_TITLE}" \
+      -f "key=$(cat "${DEPLOY_KEY_PATH}.pub")" \
+      -F "read_only=true" >/dev/null
+    echo "✓ Registered."
+  fi
+
+  # Base64-encode for safe single-line substitution into cloud-init's
+  # write_files block (encoding: base64).
+  DEPLOY_KEY_B64=$(base64 < "$DEPLOY_KEY_PATH" | tr -d '\n')
 fi
 
 # Prompt for Tailscale auth-key (single-use, ≤24h TTL — generate fresh)
@@ -102,20 +145,19 @@ echo
 echo "Generate a fresh Tailscale auth-key:"
 echo "  https://login.tailscale.com/admin/settings/keys"
 echo "  → 'Generate auth key' → Reusable: NO, Ephemeral: NO, Expiration: ≤24h"
+echo "  → Tags: tick 'tag:coding-agent-vps' (REQUIRED — see docs/SETUP.md Phase 3)"
 echo
 read -rsp "Paste Tailscale auth-key (input hidden): " TAILSCALE_AUTH_KEY
 echo
 
-# Base64-encode the deploy private key (single-line — safe for sed
-# substitution into the cloud-init.yaml write_files block).
-DEPLOY_KEY_B64=$(base64 < "$DEPLOY_KEY_PATH" | tr -d '\n')
-
-# Substitute into cloud-init template
+# Substitute into cloud-init template. For public repos DEPLOY_KEY_B64 is
+# empty — the deploy-key write_files entry becomes a 0-byte file (harmless;
+# never used because the HTTPS clone needs no auth).
 USER_DATA=$(mktemp)
 trap 'rm -f "$USER_DATA"' EXIT
 sed -e "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" \
     -e "s|__DEPLOY_KEY_B64__|${DEPLOY_KEY_B64}|g" \
-    -e "s|__GH_REPO__|${GH_REPO}|g" \
+    -e "s|__CLONE_URL__|${CLONE_URL}|g" \
     cloud-init.yaml > "$USER_DATA"
 
 echo "Provisioning $SERVER_NAME (type=$TYPE, location=$LOCATION, firewall=$FIREWALL)..."

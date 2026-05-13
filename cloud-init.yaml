@@ -9,9 +9,11 @@
 # Two secrets in user-data — both injected by scripts/provision.sh:
 #   __TAILSCALE_AUTH_KEY__  single-use, short-TTL Tailscale auth key
 #   __DEPLOY_KEY_B64__      base64-encoded ed25519 private key (read-only
-#                           deploy key, scoped to the single repo named in
-#                           __GH_REPO__ below — auto-detected from git origin)
-#   __GH_REPO__             owner/repo of this checkout (e.g. user/coding-agent-vps)
+#                           deploy key, scoped to the repo this checkout
+#                           was cloned from). For public repos this is
+#                           empty — clone happens over HTTPS and the
+#                           deploy-key file is created empty + unused.
+#   __CLONE_URL__           https:// for public repos, git@github.com: for private
 # Hetzner is the only third party that ever sees these — acceptable since
 # Hetzner is in the trusted-dependency set (docs/REQUIREMENTS.md §2).
 
@@ -83,7 +85,7 @@ runcmd:
   #    doesn't enforce mode), then clone over SSH using the deploy key.
   - chmod 0700 /root/.ssh
   - mkdir -p /opt/agent-vps
-  - git clone git@github.com:__GH_REPO__.git /opt/agent-vps
+  - git clone __CLONE_URL__ /opt/agent-vps
   - bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 
 final_message: "Cloud-init complete. SSH in via Tailscale and run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"
