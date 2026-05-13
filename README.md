@@ -72,6 +72,15 @@ reference for the equivalent calls in any other provider.
 
 ## Setup
 
+> [!WARNING]
+> Always audit third-party code before installing. This repo runs
+> scripts on your laptop (provision.sh, gh API calls) and on a fresh
+> VPS (cloud-init, daemons, a Docker sandbox). Skim
+> [docs/SETUP.md](./docs/SETUP.md), [scripts/](./scripts/),
+> [cloud-init.yaml](./cloud-init.yaml), and
+> [daemon/](./daemon/) before letting an agent run them on your
+> behalf.
+
 This repo is designed to be deployed **by an AI agent on your behalf**.
 The setup involves several web UIs (Hetzner, Infisical, Tailscale,
 GitHub) — having the agent walk you through that flow is materially
