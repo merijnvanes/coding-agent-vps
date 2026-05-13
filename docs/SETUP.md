@@ -9,10 +9,19 @@
 
 **If you are the AI agent:** Walk through each phase in order. Drive
 autonomously — ask the user for input only when you genuinely cannot
-proceed without it (web-UI clicks, OAuth flows, secret values). After
-each phase, briefly tell the user what just happened. If you hit a
+proceed without it (web-UI clicks, OAuth flows, etc.). After each
+phase, briefly tell the user what just happened. If you hit a
 verification failure, refer the user to `docs/USAGE.md` Troubleshooting
 and surface the specific symptom.
+
+> **You never need to see any secret value.** The user holds all
+> secrets in their password manager. They get typed directly into
+> interactive prompts (`provision.sh`, `bootstrap.sh`, OAuth flows)
+> or pasted into web UIs (Infisical, Tailscale) — never into the
+> chat with you. **Never ask the user to paste a secret here**, even
+> as an option. If you need to *know that something is done*, ask
+> "done?" not "what was the value?". This is the entire architectural
+> point of the chat-orchestration / secret-locality split.
 
 **If you are the human:** paste the prompt from the README into your
 agent and let it drive. Stay near the keyboard — you'll be asked to
@@ -261,15 +270,22 @@ the sandbox, that's not scaffolded in v1 — they'd add their own
 routing to `daemon/cred-daemon.sh` (pattern matches `cloudflare-token`
 or `hcloud-token`).
 
-### Automated steps (you, the agent)
+### What you (the agent) need to know
 
-Hold onto these values — `bootstrap.sh` will need them in Phase 6:
+The **user** keeps the following values in their password manager —
+you do NOT need to see them. They'll type them directly into
+`bootstrap.sh`'s interactive prompts in Phase 6 (in their own SSH
+session). Just confirm with them that they have each item recorded:
 
 - Infisical project ID
-- Environment slug
-- Infisical URL (matching their region)
-- Client ID
-- Client Secret
+- Environment slug (lowercase, e.g. `dev`)
+- Infisical URL (which region — `us.infisical.com`, `eu.infisical.com`, or `app.infisical.com`)
+- Universal Auth Client ID (UUID)
+- Universal Auth Client Secret (shown once at creation)
+
+**Do not ask the user to paste any of these into the chat.** Ask
+"have you saved all five to your password manager?" and proceed when
+they say yes.
 
 ### Verify
 
@@ -465,8 +481,9 @@ The script will:
 2. **For private repos only**: generate (if missing) a read-only ed25519
    deploy key at `~/.ssh/coding-agent-vps-deploy` and register it on
    the repo via `gh api` (idempotent).
-3. Prompt for the Tailscale auth-key. **Ask the user to paste it** at
-   that prompt (input is hidden).
+3. Prompt for the Tailscale auth-key. The **user** pastes it
+   directly into the `provision.sh` prompt (input is hidden — the
+   key never reaches the chat with you).
 4. Warn if the local checkout has unpushed commits or working-tree
    changes (cloud-init clones from origin, so local-only changes
    wouldn't reach the VPS).
@@ -501,25 +518,27 @@ ssh <USER>@coding-agent-vps \
 **Goal.** The cred-daemon has the Infisical bootstrap credentials and
 has fetched all populated secrets at least once.
 
-### Interactive — have the user do this, you provide the values
+### Interactive — the user runs this; you stay out of the secret path
 
 `bootstrap.sh` is interactive (it reads from stdin). Have the user SSH
-in and run it:
+in and run it themselves:
 
 ```bash
 ssh <USER>@coding-agent-vps
 sudo bash /opt/agent-vps/scripts/bootstrap.sh
 ```
 
-Provide the values one by one as it prompts:
+Tell them the script will prompt for five values in this order. They
+paste each value from their password manager directly into the
+prompt — **the values do not pass through you**:
 
-| Prompt | Value (from Phase 2) |
+| Prompt order | What they paste (from Phase 2) |
 |---|---|
-| Infisical project ID | their project ID |
-| Infisical environment slug | the slug they chose (`dev` etc.) |
-| Infisical URL | their region URL |
-| Client ID | the Universal Auth Client ID UUID |
-| Client Secret | (hidden input — they paste from password manager) |
+| 1. Infisical project ID | their project ID |
+| 2. Infisical environment slug | the slug they chose (`dev` etc.) |
+| 3. Infisical URL | their region URL |
+| 4. Client ID | the Universal Auth Client ID UUID |
+| 5. Client Secret | (hidden input — pasted from password manager) |
 
 ### Verify
 
