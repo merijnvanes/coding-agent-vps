@@ -177,6 +177,92 @@ NEW_USER="$NEW_USER" git diff
 Confirm with the user that the diff looks right (only username-shaped
 occurrences changed) before continuing. The change isn't committed yet.
 
+## Refresh pinned versions (~5 min, agent does this)
+
+**Goal.** Every third-party tool we install is version-pinned. Before
+running `provision.sh` (or any rebuild that triggers a fresh install),
+update each pin to the latest stable release that is **at least 7 days
+old**. This is the supply-chain cooldown rule: a compromised version
+typically gets spotted and yanked within days, so refusing too-new
+releases avoids the patient-zero window.
+
+### Where the pins live
+
+| File | Pins |
+|---|---|
+| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` |
+| `cloud-init.yaml` (Tailscale install in `runcmd`) | inline `tailscale=X.Y.Z` |
+| `scripts/cloud-init-tasks.sh` (Docker install block) | `DOCKER_CE_VERSION`, `CONTAINERD_VERSION`, `DOCKER_BUILDX_VERSION`, `DOCKER_COMPOSE_VERSION` |
+
+### Lookup procedure
+
+For each pin, find the latest published version dated ≥7 days ago and
+that is still available in the upstream repo (older versions are
+sometimes garbage-collected).
+
+Compute the cutoff timestamp portably (works on both Linux GNU `date`
+and macOS BSD `date`):
+
+```bash
+T=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+```
+
+**npm packages** (`pnpm`, `wrangler`, `@anthropic-ai/claude-code`,
+`@openai/codex`):
+
+```bash
+curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
+  .time
+  | to_entries
+  | map(select(.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$") and .value < $t))
+  | sort_by(.value) | last | .key'
+```
+
+**GitHub releases** (`uv`, `hcloud`):
+
+```bash
+curl -s "https://api.github.com/repos/<owner>/<repo>/releases" \
+  | jq -r --arg t "$T" '
+      map(select(.prerelease == false
+                 and .draft == false
+                 and .published_at < $t))
+      | .[0].tag_name'
+```
+
+⚠️ For **hcloud**, GitHub tags are prefixed with `v` (e.g. `v1.64.1`)
+but the Dockerfile's `HCLOUD_VERSION` ARG is the version *without*
+the prefix (the URL adds it back: `releases/download/v${HCLOUD_VERSION}/...`).
+Strip the `v` before pasting: pipe the snippet above through
+`sed 's/^v//'`.
+
+For `uv` also fetch the matching SHA256 (update `UV_SHA256` alongside
+`UV_VERSION`):
+
+```bash
+curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz.sha256"
+```
+
+**APT-installed** (`nodejs`, `tailscale`, `google-cloud-cli`,
+`docker-*`, `infisical`): release dates aren't in the APT Packages
+metadata. Get the list of available versions from the repo, then
+cross-reference each vendor's changelog for the date:
+
+| Tool | Available versions | Changelog |
+|---|---|---|
+| nodejs | `curl -fsSL https://deb.nodesource.com/node_22.x/dists/nodistro/main/binary-amd64/Packages.gz \| gunzip \| awk '/^Package: nodejs$/{p=1} p && /^Version:/{print; p=0}'` | https://nodejs.org/en/about/previous-releases |
+| tailscale | `curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/dists/noble/main/binary-amd64/Packages \| awk '/^Package: tailscale$/{p=1} p && /^Version:/{print; p=0}'` | https://tailscale.com/changelog |
+| google-cloud-cli | `curl -fsSL https://packages.cloud.google.com/apt/dists/cloud-sdk/main/binary-amd64/Packages \| awk '/^Package: google-cloud-cli$/{p=1} p && /^Version:/{print; p=0}'` | https://cloud.google.com/sdk/docs/release-notes |
+| docker-ce (+ -cli, -rootless-extras share the version), containerd.io, docker-buildx-plugin, docker-compose-plugin | list .deb names: `curl -fsSL https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/` | https://docs.docker.com/engine/release-notes/ |
+| infisical | `curl -fsSL https://artifacts-cli.infisical.com/deb/dists/stable/main/binary-amd64/Packages \| awk '/^Package: infisical$/{p=1} p && /^Version:/{print; p=0}'` | https://github.com/Infisical/infisical/releases |
+
+### After updating
+
+Commit the version bumps (or stage them) before `provision.sh`. If a
+later step fails with "version X.Y.Z not found" or similar, the chosen
+version was likely garbage-collected from the upstream repo — pick the
+next-oldest qualifying version and retry.
+
 ## Phase 1: Hetzner Cloud (~5 min)
 
 **Goal.** Two Hetzner projects (one for the agent VPS, one for their

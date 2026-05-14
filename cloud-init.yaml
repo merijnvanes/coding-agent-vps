@@ -87,7 +87,11 @@ runcmd:
   - chmod 0644 /usr/share/keyrings/tailscale-archive-keyring.gpg
   - 'echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main" > /etc/apt/sources.list.d/tailscale.list'
   - apt-get update
-  - apt-get install -y --no-install-recommends tailscale
+  # Tailscale pinned. Refresh at setup time per docs/SETUP.md "Refresh pinned
+  # versions" — pick the latest stable that is ≥7 days old and that is still
+  # present in pkgs.tailscale.com's noble Packages file (older versions may
+  # have been GC'd from the repo).
+  - apt-get install -y --no-install-recommends tailscale=1.96.2
   # No --accept-routes: the VPS doesn't need to route through any subnet
   # routes peers advertise (laptop LANs, corporate networks, etc.). The
   # design's asymmetric-reachability promise is cleaner without it.

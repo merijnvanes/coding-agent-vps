@@ -70,6 +70,17 @@ grep -q '^dev:100000:' /etc/subgid || echo "dev:100000:65536" >> /etc/subgid
 # === 4. Docker + rootless setup ===
 
 if ! command -v docker >/dev/null 2>&1; then
+  # Pinned versions — refresh at setup time per docs/SETUP.md "Refresh
+  # pinned versions". docker-ce / docker-ce-cli / docker-ce-rootless-extras
+  # are released together and share a version string; the other three have
+  # independent release cadences. Lookup: query the Docker apt repo
+  # (`apt-cache madison <pkg>` after adding the repo, or curl the noble
+  # Packages file under download.docker.com/linux/ubuntu/dists/noble/).
+  DOCKER_CE_VERSION="5:29.4.2-1~ubuntu.24.04~noble"
+  CONTAINERD_VERSION="2.2.2-1~ubuntu.24.04~noble"
+  DOCKER_BUILDX_VERSION="0.33.0-1~ubuntu.24.04~noble"
+  DOCKER_COMPOSE_VERSION="5.1.2-1~ubuntu.24.04~noble"
+
   # Manual Docker APT setup (no `get.docker.com | sh`). Inlines what the
   # convenience script does: fetch the static GPG key file, write keyring
   # + sources.list, apt install. Subsequent apt updates are GPG-verified.
@@ -88,8 +99,12 @@ if ! command -v docker >/dev/null 2>&1; then
   # convenience script installed this implicitly; doing apt by hand we have
   # to name it.
   apt-get install -y --no-install-recommends \
-    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
-    docker-ce-rootless-extras
+    docker-ce="${DOCKER_CE_VERSION}" \
+    docker-ce-cli="${DOCKER_CE_VERSION}" \
+    containerd.io="${CONTAINERD_VERSION}" \
+    docker-buildx-plugin="${DOCKER_BUILDX_VERSION}" \
+    docker-compose-plugin="${DOCKER_COMPOSE_VERSION}" \
+    docker-ce-rootless-extras="${DOCKER_CE_VERSION}"
 fi
 
 # We use rootless Docker; disable the rootful daemon.

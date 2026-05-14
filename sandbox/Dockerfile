@@ -5,6 +5,27 @@
 
 FROM ubuntu:24.04
 
+# === Pinned third-party tool versions ===
+# Each install line below references one of these ARGs. Refresh them at setup
+# time per docs/SETUP.md "Refresh pinned versions" — the rule is: pick the
+# latest stable release that is at least 7 days old (supply-chain cooldown),
+# for every entry. The agent running the setup MUST do this before any
+# `docker build` / cloud-init triggers a fresh install.
+#
+# APT pins for NodeSource, gcloud, and Infisical require the repo metadata
+# to be queryable (curl the Packages file or apt-cache madison after adding
+# the repo). The refresh procedure documents the lookup mechanics per tool.
+ARG NODEJS_VERSION=22.22.0-1nodesource1
+ARG PNPM_VERSION=11.0.7
+ARG UV_VERSION=0.11.11
+ARG UV_SHA256=a767848254391855c96df271e9ca8b7f72dd172d310460447853d25d907b9ae0
+ARG GCLOUD_VERSION=458.0.0-0
+ARG WRANGLER_VERSION=4.88.0
+ARG CLAUDE_CODE_VERSION=2.1.132
+ARG CODEX_VERSION=0.128.0
+ARG INFISICAL_VERSION=0.39.0
+ARG HCLOUD_VERSION=1.64.1
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
@@ -59,10 +80,10 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         'Signed-By: /usr/share/keyrings/nodesource.gpg' \
         > /etc/apt/sources.list.d/nodesource.sources \
     && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get install -y --no-install-recommends "nodejs=${NODEJS_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable \
-    && corepack prepare pnpm@latest --activate
+    && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 # pnpm global bin dir on PATH so `pnpm add -g X` produces invokable commands.
 # pnpm 9+ installs global binaries to $PNPM_HOME/bin and errors out at
@@ -84,14 +105,9 @@ min-release-age=7
 EOF
 
 # --- uv (Python package manager — single Go binary) ---
-# Pinned to a specific release, fetched directly from astral-sh/uv's GitHub
-# releases, with SHA256 verification against the checksum file astral publishes
-# alongside each binary. No shell script from astral.sh runs at build time.
-# Bumping uv requires updating BOTH UV_VERSION and UV_SHA256 below — the
-# checksum is for uv-x86_64-unknown-linux-gnu.tar.gz, available at
-# https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
-ENV UV_VERSION=0.11.14 \
-    UV_SHA256=f3b623eb0e6141a7053d571d59a0bdc341e0f238ea8f5f0b4815ddbec9a2a296
+# Pinned via UV_VERSION + UV_SHA256 at the top of this file. SHA256 is from
+# `https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz.sha256`
+# Bumping uv requires updating BOTH ARGs in lockstep.
 RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
         -o /tmp/uv.tar.gz \
     && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
@@ -109,7 +125,7 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
         > /etc/apt/sources.list.d/google-cloud-sdk.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends google-cloud-cli \
+    && apt-get install -y --no-install-recommends "google-cloud-cli=${GCLOUD_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # --- pnpm config for build-time installs (root) ---
@@ -127,10 +143,10 @@ RUN mkdir -p /root/.config/pnpm \
 # pnpm 10+ blocks postinstall scripts by default (supply-chain hardening).
 # wrangler/claude-code/codex all need their postinstall to run to download
 # native binaries. --allow-build whitelists them explicitly.
-RUN pnpm add -g --allow-build=wrangler wrangler
+RUN pnpm add -g --allow-build=wrangler "wrangler@${WRANGLER_VERSION}"
 
 # --- hcloud CLI (Hetzner) ---
-RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz" \
+RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_VERSION}/hcloud-linux-amd64.tar.gz" \
       | tar -xz -C /usr/local/bin hcloud
 
 # --- Infisical CLI (single Go binary) ---
@@ -150,7 +166,7 @@ RUN curl -1sLf https://artifacts-cli.infisical.com/infisical.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/infisical-archive-keyring.gpg] https://artifacts-cli.infisical.com/deb stable main" \
         > /etc/apt/sources.list.d/infisical.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends infisical \
+    && apt-get install -y --no-install-recommends "infisical=${INFISICAL_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # --- AI coding CLIs — global install via pnpm ---
@@ -158,7 +174,8 @@ RUN curl -1sLf https://artifacts-cli.infisical.com/infisical.gpg \
 RUN pnpm add -g \
       --allow-build=@anthropic-ai/claude-code \
       --allow-build=@openai/codex \
-      @anthropic-ai/claude-code @openai/codex
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      "@openai/codex@${CODEX_VERSION}"
 
 # --- non-root agent user ---
 # Pre-create the volume mount paths so named volumes inherit agent:agent
