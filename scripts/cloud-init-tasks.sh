@@ -70,8 +70,26 @@ grep -q '^dev:100000:' /etc/subgid || echo "dev:100000:65536" >> /etc/subgid
 # === 4. Docker + rootless setup ===
 
 if ! command -v docker >/dev/null 2>&1; then
-  log "installing Docker engine"
-  curl -fsSL https://get.docker.com | sh
+  # Manual Docker APT setup (no `get.docker.com | sh`). Inlines what the
+  # convenience script does: fetch the static GPG key file, write keyring
+  # + sources.list, apt install. Subsequent apt updates are GPG-verified.
+  log "installing Docker engine via manual APT setup"
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    -o /etc/apt/keyrings/docker.asc
+  chmod 0644 /etc/apt/keyrings/docker.asc
+  arch=$(dpkg --print-architecture)
+  codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+  echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${codename} stable" \
+    > /etc/apt/sources.list.d/docker.list
+  apt-get update
+  # docker-ce-rootless-extras provides dockerd-rootless-setuptool.sh, which
+  # we invoke below to wire up rootless Docker for the dev user. The Docker
+  # convenience script installed this implicitly; doing apt by hand we have
+  # to name it.
+  apt-get install -y --no-install-recommends \
+    docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+    docker-ce-rootless-extras
 fi
 
 # We use rootless Docker; disable the rootful daemon.

@@ -40,8 +40,26 @@ RUN mkdir -p /etc/ssh && \
       >> /etc/ssh/ssh_known_hosts
 
 # --- Node.js LTS (22) + pnpm via corepack ---
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
+# Manual NodeSource APT setup — inlines what `deb.nodesource.com/setup_22.x`
+# does (fetch GPG key, write keyring + sources.list, apt install). Trade-off
+# vs piping the upstream shell script: no remote code executes during build,
+# but if NodeSource changes their repo URI / codename ("nodistro") we'll have
+# to update this block. Subsequent `apt-get update`s are GPG-verified via
+# the keyring, so a CDN swap can't substitute packages signed by a different
+# key. Key URL/path/codename mirrors setup_22.x verbatim.
+RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
+    && chmod 0644 /usr/share/keyrings/nodesource.gpg \
+    && printf '%s\n' \
+        'Types: deb' \
+        'URIs: https://deb.nodesource.com/node_22.x' \
+        'Suites: nodistro' \
+        'Components: main' \
+        'Architectures: amd64' \
+        'Signed-By: /usr/share/keyrings/nodesource.gpg' \
+        > /etc/apt/sources.list.d/nodesource.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && corepack enable \
     && corepack prepare pnpm@latest --activate
@@ -66,14 +84,33 @@ min-release-age=7
 EOF
 
 # --- uv (Python package manager — single Go binary) ---
-RUN curl -fsSL https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+# Pinned to a specific release, fetched directly from astral-sh/uv's GitHub
+# releases, with SHA256 verification against the checksum file astral publishes
+# alongside each binary. No shell script from astral.sh runs at build time.
+# Bumping uv requires updating BOTH UV_VERSION and UV_SHA256 below — the
+# checksum is for uv-x86_64-unknown-linux-gnu.tar.gz, available at
+# https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz.sha256
+ENV UV_VERSION=0.11.14 \
+    UV_SHA256=f3b623eb0e6141a7053d571d59a0bdc341e0f238ea8f5f0b4815ddbec9a2a296
+RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+        -o /tmp/uv.tar.gz \
+    && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/uv.tar.gz -C /usr/local/bin --strip-components=1 \
+        uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx \
+    && rm /tmp/uv.tar.gz
 
 # --- gcloud SDK ---
-RUN curl -fsSL https://sdk.cloud.google.com -o /tmp/install-gcloud.sh \
-    && bash /tmp/install-gcloud.sh --disable-prompts --install-dir=/opt \
-    && ln -sf /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud \
-    && ln -sf /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil \
-    && rm /tmp/install-gcloud.sh
+# Manual APT setup (no `sdk.cloud.google.com | bash`). Binaries land in
+# /usr/bin/{gcloud,gsutil} from the apt package — no /opt symlinks needed.
+# Package renamed `google-cloud-sdk` → `google-cloud-cli` at 371.0.0+.
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+    && chmod 0644 /usr/share/keyrings/cloud.google.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends google-cloud-cli \
+    && rm -rf /var/lib/apt/lists/*
 
 # --- pnpm config for build-time installs (root) ---
 # The `pnpm add -g` calls below run as root, BEFORE the agent user is created
@@ -103,7 +140,16 @@ RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/latest/download/hcl
 # and routes them to bind-mounted files. The two workspaces / identities
 # don't see each other. Login state is intentionally NOT persisted across
 # container rebuilds — see docs/USAGE.md.
-RUN curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash \
+#
+# Manual APT setup (no `setup.deb.sh | bash`). Inlines exactly what the
+# upstream Cloudsmith setup script does — fetch the GPG key file, dearmor
+# to a keyring, write sources.list. Subsequent apt installs are GPG-verified.
+RUN curl -1sLf https://artifacts-cli.infisical.com/infisical.gpg \
+        | gpg --dearmor -o /usr/share/keyrings/infisical-archive-keyring.gpg \
+    && chmod 0644 /usr/share/keyrings/infisical-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/infisical-archive-keyring.gpg] https://artifacts-cli.infisical.com/deb stable main" \
+        > /etc/apt/sources.list.d/infisical.list \
+    && apt-get update \
     && apt-get install -y --no-install-recommends infisical \
     && rm -rf /var/lib/apt/lists/*
 
