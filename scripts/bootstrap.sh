@@ -14,6 +14,7 @@ set -euo pipefail
 
 CONFIG_FILE="/etc/agent-vps/config.env"
 BOOTSTRAP_FILE="/etc/agent-vps/infisical-uauth"
+SANDBOX_CONFIG_FILE="/var/lib/agent-vps/agent-config/env/sandbox-config.sh"
 
 ask()       { local prompt="$1" default="${2:-}" var=""; read -rp "$prompt${default:+ [$default]}: " var; printf '%s' "${var:-$default}"; }
 ask_secret(){ local prompt="$1" var=""; read -rsp "$prompt: " var; echo >&2; printf '%s' "$var"; }
@@ -21,11 +22,12 @@ ask_secret(){ local prompt="$1" var=""; read -rsp "$prompt: " var; echo >&2; pri
 echo
 echo "=== coding-agent-vps bootstrap ==="
 echo
-PROJECT_ID=$(ask     "Infisical project ID")
-ENV=$(ask            "Infisical environment slug" "dev")
-URL=$(ask            "Infisical URL" "https://app.infisical.com")
-CLIENT_ID=$(ask      "Infisical Universal Auth client ID")
-CLIENT_SECRET=$(ask_secret "Infisical Universal Auth client secret (input hidden)")
+CORE_PROJECT_ID=$(ask    "Infisical project ID — coding-agent-vps (host-side)")
+TOOLING_PROJECT_ID=$(ask "Infisical project ID — coding-agent-vps-tooling (sandbox-side)")
+ENV=$(ask                "Infisical environment slug" "dev")
+URL=$(ask                "Infisical URL" "https://app.infisical.com")
+CLIENT_ID=$(ask          "Universal Auth client ID (agent-vps identity in the coding-agent-vps project)")
+CLIENT_SECRET=$(ask_secret "Universal Auth client secret (input hidden)")
 echo
 
 # Write a KEY=VALUE line with the value shell-quoted via `printf %q`, so
@@ -34,11 +36,11 @@ echo
 # a value containing `$` or `` ` `` would be expanded at source time.
 emit_kv() { printf '%s=%q\n' "$1" "$2"; }
 
-# --- /etc/agent-vps/config.env (non-secret) ---
+# --- /etc/agent-vps/config.env (non-secret, cred-daemon's view) ---
 {
   echo "# coding-agent-vps cred-daemon configuration"
   echo "# Re-run scripts/bootstrap.sh to update."
-  emit_kv INFISICAL_PROJECT_ID "$PROJECT_ID"
+  emit_kv INFISICAL_PROJECT_ID "$CORE_PROJECT_ID"
   emit_kv INFISICAL_ENV         "$ENV"
   emit_kv INFISICAL_URL         "$URL"
 } | install -m 0644 -o root -g root /dev/stdin "$CONFIG_FILE"
@@ -48,6 +50,19 @@ emit_kv() { printf '%s=%q\n' "$1" "$2"; }
   emit_kv INFISICAL_CLIENT_ID     "$CLIENT_ID"
   emit_kv INFISICAL_CLIENT_SECRET "$CLIENT_SECRET"
 } | install -m 0600 -o creds -g creds /dev/stdin "$BOOTSTRAP_FILE"
+
+# --- /var/lib/agent-vps/agent-config/env/sandbox-config.sh (non-secret) ---
+# The tooling Infisical project ID and the env slug, exported as env vars
+# the sandbox-side PATH shims read. This file is bind-mounted into the
+# sandbox at /run/agent-env/, sourced by /etc/profile.d/agent-env.sh on
+# shell start. Not a secret — just a public identifier.
+install -d -m 0755 -o creds -g creds /var/lib/agent-vps/agent-config/env
+{
+  echo "# Non-secret sandbox config — sourced by every sandbox shell."
+  echo "# Re-run scripts/bootstrap.sh to update."
+  echo "export INFISICAL_TOOLING_PROJECT_ID=$(printf '%q' "$TOOLING_PROJECT_ID")"
+  echo "export INFISICAL_ENV=$(printf '%q' "$ENV")"
+} | install -m 0644 -o creds -g creds /dev/stdin "$SANDBOX_CONFIG_FILE"
 
 # --- Run the daemon once ---
 echo "Running first credential fetch from Infisical..."
