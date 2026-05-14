@@ -137,6 +137,10 @@ Before starting, confirm the user has (or direct them to create):
 - A Tailscale account (free tier). https://tailscale.com
 - A GitHub account.
 - ~30 min of time to complete the flow.
+- Local CLI tools on the laptop running this setup: `curl`, `jq`, `git`,
+  `gh`, `hcloud`. The "Refresh pinned versions" section below leans on
+  `curl + jq` for registry/release lookups; install via `brew install jq`
+  on macOS or `apt-get install -y jq` on Debian/Ubuntu if missing.
 
 **Optional:** push notifications when credentials fail to refresh.
 If the user wants this, have them install the [ntfy](https://ntfy.sh)
@@ -190,9 +194,13 @@ releases avoids the patient-zero window.
 
 | File | Pins |
 |---|---|
-| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` |
+| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256` |
 | `cloud-init.yaml` (Tailscale install in `runcmd`) | inline `tailscale=X.Y.Z` |
 | `scripts/cloud-init-tasks.sh` (Docker install block) | `DOCKER_CE_VERSION`, `CONTAINERD_VERSION`, `DOCKER_BUILDX_VERSION`, `DOCKER_COMPOSE_VERSION` |
+
+`UV_SHA256` and `HCLOUD_SHA256` MUST be refreshed in lockstep with the
+matching `_VERSION` ARG — they verify the downloaded tarball at build
+time, so a mismatch fails the build.
 
 ### Lookup procedure
 
@@ -208,14 +216,14 @@ T=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
     || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
 ```
 
-**npm packages** (`pnpm`, `wrangler`, `@anthropic-ai/claude-code`,
+**npm packages** (`npm`, `pnpm`, `wrangler`, `@anthropic-ai/claude-code`,
 `@openai/codex`):
 
 ```bash
 curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
   .time
   | to_entries
-  | map(select(.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$") and .value < $t))
+  | map(select((.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.value < $t)))
   | sort_by(.value) | last | .key'
 ```
 
@@ -243,25 +251,70 @@ For `uv` also fetch the matching SHA256 (update `UV_SHA256` alongside
 curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz.sha256"
 ```
 
+For `hcloud` also fetch the matching SHA256 (update `HCLOUD_SHA256`
+alongside `HCLOUD_VERSION`). Hetzner publishes a single `checksums.txt`
+covering every release asset; grep the linux-amd64 line:
+
+```bash
+curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_VERSION}/checksums.txt" \
+  | awk '$2 == "hcloud-linux-amd64.tar.gz" {print $1}'
+```
+
 **APT-installed** (`nodejs`, `tailscale`, `google-cloud-cli`,
 `docker-*`, `infisical`): release dates aren't in the APT Packages
 metadata. Get the list of available versions from the repo, then
-cross-reference each vendor's changelog for the date:
+cross-reference each vendor's changelog for the date.
 
-| Tool | Available versions | Changelog |
-|---|---|---|
-| nodejs | `curl -fsSL https://deb.nodesource.com/node_22.x/dists/nodistro/main/binary-amd64/Packages.gz \| gunzip \| awk '/^Package: nodejs$/{p=1} p && /^Version:/{print; p=0}'` | https://nodejs.org/en/about/previous-releases |
-| tailscale | `curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/dists/noble/main/binary-amd64/Packages \| awk '/^Package: tailscale$/{p=1} p && /^Version:/{print; p=0}'` | https://tailscale.com/changelog |
-| google-cloud-cli | `curl -fsSL https://packages.cloud.google.com/apt/dists/cloud-sdk/main/binary-amd64/Packages \| awk '/^Package: google-cloud-cli$/{p=1} p && /^Version:/{print; p=0}'` | https://cloud.google.com/sdk/docs/release-notes |
-| docker-ce (+ -cli, -rootless-extras share the version), containerd.io, docker-buildx-plugin, docker-compose-plugin | list .deb names: `curl -fsSL https://download.docker.com/linux/ubuntu/dists/noble/pool/stable/amd64/` | https://docs.docker.com/engine/release-notes/ |
-| infisical | `curl -fsSL https://artifacts-cli.infisical.com/deb/dists/stable/main/binary-amd64/Packages \| awk '/^Package: infisical$/{p=1} p && /^Version:/{print; p=0}'` | https://github.com/Infisical/infisical/releases |
+Each recipe below prints the available versions in the upstream repo;
+pick the latest one whose changelog entry is dated ≥7 days ago.
+
+**nodejs** — changelog: <https://nodejs.org/en/about/previous-releases>
+
+```bash
+curl -fsSL https://deb.nodesource.com/node_22.x/dists/nodistro/main/binary-amd64/Packages.gz \
+  | gunzip \
+  | awk '/^Package: nodejs$/{p=1} p && /^Version:/{print; p=0}'
+```
+
+**tailscale** — changelog: <https://tailscale.com/changelog>
+
+```bash
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/dists/noble/main/binary-amd64/Packages \
+  | awk '/^Package: tailscale$/{p=1} p && /^Version:/{print; p=0}'
+```
+
+**google-cloud-cli** — changelog: <https://cloud.google.com/sdk/docs/release-notes>
+
+```bash
+curl -fsSL https://packages.cloud.google.com/apt/dists/cloud-sdk/main/binary-amd64/Packages \
+  | awk '/^Package: google-cloud-cli$/{p=1} p && /^Version:/{print; p=0}'
+```
+
+**docker-ce / docker-ce-cli / docker-ce-rootless-extras / containerd.io / docker-buildx-plugin / docker-compose-plugin** — changelog: <https://docs.docker.com/engine/release-notes/>. The three `docker-ce*` packages share a version string; the others are independent.
+
+```bash
+curl -fsSL https://download.docker.com/linux/ubuntu/dists/noble/stable/binary-amd64/Packages \
+  | awk -v pkg="docker-ce|containerd.io|docker-buildx-plugin|docker-compose-plugin" \
+        'BEGIN{re="^Package: ("pkg")$"}
+         $0~re{p=1; name=$2; next}
+         /^Package:/{p=0}
+         p && /^Version:/{print name, $2}'
+```
+
+**infisical** — changelog: <https://github.com/Infisical/infisical/releases>
+
+```bash
+curl -fsSL https://artifacts-cli.infisical.com/deb/dists/stable/main/binary-amd64/Packages \
+  | awk '/^Package: infisical$/{p=1} p && /^Version:/{print; p=0}'
+```
 
 ### After updating
 
-Commit the version bumps (or stage them) before `provision.sh`. If a
-later step fails with "version X.Y.Z not found" or similar, the chosen
-version was likely garbage-collected from the upstream repo — pick the
-next-oldest qualifying version and retry.
+**Commit AND push** the version bumps before running `provision.sh` —
+that script clones from `origin`, so unpushed changes will not reach the
+VPS. If a build step later fails with `version X.Y.Z not found`, the
+chosen version was likely garbage-collected from the upstream repo;
+pick the next-oldest qualifying version and retry.
 
 ## Phase 1: Hetzner Cloud (~5 min)
 

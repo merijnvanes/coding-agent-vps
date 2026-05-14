@@ -16,6 +16,9 @@ FROM ubuntu:24.04
 # to be queryable (curl the Packages file or apt-cache madison after adding
 # the repo). The refresh procedure documents the lookup mechanics per tool.
 ARG NODEJS_VERSION=22.22.0-1nodesource1
+# npm bundled with Node 22 is 10.x, which does NOT support `min-release-age`.
+# Bump to npm 11+ so the /etc/npmrc cooldown actually applies to `npm install`.
+ARG NPM_VERSION=11.13.0
 ARG PNPM_VERSION=11.0.7
 ARG UV_VERSION=0.11.11
 ARG UV_SHA256=a767848254391855c96df271e9ca8b7f72dd172d310460447853d25d907b9ae0
@@ -25,10 +28,23 @@ ARG CLAUDE_CODE_VERSION=2.1.132
 ARG CODEX_VERSION=0.128.0
 ARG INFISICAL_VERSION=0.39.0
 ARG HCLOUD_VERSION=1.64.1
+# SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
+# https://github.com/hetznercloud/cli/releases/download/v$HCLOUD_VERSION/checksums.txt
+ARG HCLOUD_SHA256=f6f60a929776ac300dffd42d8a8df6ac0d43d0d05e17bf6ecf6aa5b53fa364c2
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
+
+# Claude Code auto-updates at runtime by default, which would silently bypass
+# the pinned CLAUDE_CODE_VERSION above. Disable so the pin is load-bearing.
+ENV DISABLE_AUTOUPDATER=1
+
+# npm's "global" config is $PREFIX/etc/npmrc by default (where $PREFIX is
+# `npm config get prefix` — typically /usr for apt-installed Node, NOT /etc).
+# Without this override, /etc/npmrc below is silently ignored. Setting
+# NPM_CONFIG_GLOBALCONFIG explicitly points npm at the file we actually write.
+ENV NPM_CONFIG_GLOBALCONFIG=/etc/npmrc
 
 # --- base system packages ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -82,6 +98,7 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     && apt-get update \
     && apt-get install -y --no-install-recommends "nodejs=${NODEJS_VERSION}" \
     && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "npm@${NPM_VERSION}" \
     && corepack enable \
     && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
@@ -92,14 +109,17 @@ ENV PNPM_HOME=/usr/local/pnpm
 ENV PATH="${PNPM_HOME}/bin:${PATH}"
 RUN mkdir -p "${PNPM_HOME}/bin"
 
-# /etc/npmrc — read by the npm CLI only.
+# /etc/npmrc — read by the npm CLI only. ENV NPM_CONFIG_GLOBALCONFIG above
+# points npm at this path explicitly (otherwise npm would look at
+# $PREFIX/etc/npmrc which is NOT /etc/npmrc on apt-installed Node).
 # pnpm 10+ ONLY reads auth/registry settings from .npmrc files; everything
 # else (minimumReleaseAge, blockExoticSubdeps, etc.) must live in pnpm's own
 # YAML config. pnpm-specific supply-chain settings are therefore set below
 # in /home/agent/.config/pnpm/config.yaml.
 # This file gives `npm install` (if anyone runs it directly) the same 7-day
-# release-age guard pnpm gets via its YAML config — npm still reads .npmrc
-# for everything.
+# release-age guard pnpm gets via its YAML config. Requires npm 11+ (the
+# NPM_VERSION ARG pins to a 11.x build) — npm 10 silently ignores
+# min-release-age.
 RUN cat >/etc/npmrc <<'EOF'
 min-release-age=7
 EOF
@@ -146,8 +166,14 @@ RUN mkdir -p /root/.config/pnpm \
 RUN pnpm add -g --allow-build=wrangler "wrangler@${WRANGLER_VERSION}"
 
 # --- hcloud CLI (Hetzner) ---
+# SHA256-verified, parallel to the uv install above. Hetzner publishes
+# checksums.txt alongside each release. Refreshing HCLOUD_VERSION at setup
+# also requires updating HCLOUD_SHA256 from the matching checksums.txt.
 RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_VERSION}/hcloud-linux-amd64.tar.gz" \
-      | tar -xz -C /usr/local/bin hcloud
+        -o /tmp/hcloud.tar.gz \
+    && echo "${HCLOUD_SHA256}  /tmp/hcloud.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/hcloud.tar.gz -C /usr/local/bin hcloud \
+    && rm /tmp/hcloud.tar.gz
 
 # --- Infisical CLI (single Go binary) ---
 # For use by app projects under /work that have their own Infisical workspace
