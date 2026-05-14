@@ -82,6 +82,17 @@ RUN pnpm add -g --allow-build=wrangler wrangler
 RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/latest/download/hcloud-linux-amd64.tar.gz" \
       | tar -xz -C /usr/local/bin hcloud
 
+# --- Infisical CLI (single Go binary) ---
+# For use by app projects under /work that have their own Infisical workspace
+# (`infisical login` + `infisical run -- <cmd>`). Distinct from the host
+# cred-daemon, which fetches *operational* secrets for the agent-vps wallet
+# and routes them to bind-mounted files. The two workspaces / identities
+# don't see each other. Login state is intentionally NOT persisted across
+# container rebuilds — see docs/USAGE.md.
+RUN curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | bash \
+    && apt-get install -y --no-install-recommends infisical \
+    && rm -rf /var/lib/apt/lists/*
+
 # --- AI coding CLIs — global install via pnpm ---
 # See --allow-build rationale above (wrangler block).
 RUN pnpm add -g \

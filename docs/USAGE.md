@@ -19,6 +19,30 @@ persists across SSH disconnects.
 Detach tmux with `Ctrl-b d`. Mouse-wheel scrollback works (mouse mode
 is on by default).
 
+## Using your app's secrets inside the sandbox
+
+When you're iterating on a code project under `/work` that has its own
+Infisical workspace, use the `infisical` CLI to fetch that project's env
+vars at runtime — no need to ever copy them onto the VPS.
+
+```bash
+cd /work/<your-project>
+infisical login                              # opens device-code flow
+infisical run --env=dev -- npm start         # or pnpm / uv run / etc.
+```
+
+`infisical login` state is **not** persisted across container rebuilds
+(unlike Claude/Codex OAuth, which use named volumes). After
+`docker compose up -d --build` or a full VPS rebuild, log in again.
+This is intentional: sandbox state is ephemeral, the CLIs themselves
+are reinstalled automatically from the Dockerfile, and the only friction
+on rebuild is re-auth — never reinstall.
+
+This uses a different Infisical identity from the `agent-vps`
+operational wallet (which the host-side cred-daemon fetches and
+bind-mounts as files into `/run/agent-env/`). The two don't see each
+other's secrets.
+
 ## Rotating credentials
 
 Per [REQUIREMENTS.md §5](./REQUIREMENTS.md#5-security-requirements),
