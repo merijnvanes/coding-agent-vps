@@ -117,12 +117,8 @@ install -d -m 0700 "$CREDS_DIR"
 # to point at on a freshly-built VPS.
 install -d -m 0755 "$CONFIG_DIR"
 install -d -m 0755 "$CONFIG_DIR/env"
-# Empty placeholder dir so the docker-compose gcloud bind mount has a target.
-# Nothing is written here — gcloud auth comes from a per-command shim via
-# /dev/shm, not via this dir.
-install -d -m 0755 "$CONFIG_DIR/gcloud"
 
-# === Enforce steady state in the sandbox-mounted config dirs ===
+# === Enforce steady state in the sandbox-mounted config dir ===
 # agent-config/env/*.sh files are sourced into every sandbox shell by
 # /etc/profile.d/agent-env.sh, so an orphan *.sh would inject unintended
 # env vars. The only file the design expects here is sandbox-config.sh
@@ -130,10 +126,9 @@ install -d -m 0755 "$CONFIG_DIR/gcloud"
 # Remove any other *.sh defensively.
 find "$CONFIG_DIR/env" -maxdepth 1 -type f -name '*.sh' \
     ! -name 'sandbox-config.sh' -print -delete 2>/dev/null || true
-# Cloud-CLI tokens reach the sandbox per-command via shims, not via this
-# dir. Remove any credential file so a direct `/usr/bin/gcloud` invocation
-# bypassing the shim can't read a stale credential.
-rm -f "$CONFIG_DIR/gcloud/application_default_credentials.json" 2>/dev/null || true
+# Remove the agent-config/gcloud/ subdir if present — gcloud auth comes
+# from a per-command shim via /dev/shm, not via a bind-mounted dir.
+rm -rf "$CONFIG_DIR/gcloud" 2>/dev/null || true
 
 # === 1. Authenticate to Infisical ===
 # Body and Authorization header are passed via temp files (mode 0600) so the

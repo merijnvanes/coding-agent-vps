@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# sandbox/wrappers/hcloud — PATH shim
+#
+# Wraps the real hcloud binary in `infisical run --` so HCLOUD_TOKEN is
+# fetched from the coding-agent-vps-tooling Infisical project at command-
+# invocation time, lands in the subprocess env for one command only, and
+# is gone when the command exits. No persistent on-disk copy in the sandbox.
+#
+# Real binary: /usr/local/bin/hcloud
+# Shim is on PATH ahead of /usr/local/bin via the Dockerfile's PATH=.../opt/agent-vps-wrappers:...
+#
+# Requires:
+#   - INFISICAL_TOOLING_PROJECT_ID (from /run/agent-env/sandbox-config.sh, sourced by /etc/profile.d/agent-env.sh)
+#   - INFISICAL_ENV (defaults to dev if unset)
+#   - A logged-in Infisical CLI session inside the container (`infisical login`)
+
+set -euo pipefail
+
+: "${INFISICAL_TOOLING_PROJECT_ID:?INFISICAL_TOOLING_PROJECT_ID not set — host bootstrap.sh has not populated /run/agent-env/sandbox-config.sh, or this shell did not source /etc/profile.d/agent-env.sh}"
+: "${INFISICAL_ENV:=dev}"
+
+exec infisical run \
+    --projectId "$INFISICAL_TOOLING_PROJECT_ID" \
+    --env="$INFISICAL_ENV" \
+    -- /usr/local/bin/hcloud "$@"

@@ -115,6 +115,24 @@ ENV PNPM_HOME=/usr/local/pnpm
 ENV PATH="${PNPM_HOME}/bin:${PATH}"
 RUN mkdir -p "${PNPM_HOME}/bin"
 
+# --- PATH shims for sandbox-side cloud CLIs ---
+# Each shim wraps the real binary in `infisical run -- <real-binary>`, so the
+# matching cloud-CLI token is fetched from the coding-agent-vps-tooling
+# Infisical project at command-invocation time, lands in the subprocess env
+# for one command, and is gone when the command exits. See
+# docs/ARCHITECTURE.md "Per-CLI integration".
+#
+# /opt/agent-vps-wrappers is FIRST in $PATH so unqualified invocations
+# (`hcloud server list`, `wrangler deploy`, etc.) resolve to the shim
+# rather than the real binary. Subprocess calls (the agent's own
+# `subprocess.Popen("hcloud", ...)`), non-interactive bash (`bash -c '...'`),
+# cron — all hit the shim. PATH shims, not shell functions, so every caller
+# is wrapped regardless of how it was invoked.
+COPY wrappers/ /opt/agent-vps-wrappers/
+RUN chmod 0755 /opt/agent-vps-wrappers/* \
+    && chown root:root /opt/agent-vps-wrappers/*
+ENV PATH="/opt/agent-vps-wrappers:${PATH}"
+
 # /etc/npmrc — read by the npm CLI only. ENV NPM_CONFIG_GLOBALCONFIG above
 # points npm at this path explicitly (otherwise npm would look at
 # $PREFIX/etc/npmrc which is NOT /etc/npmrc on apt-installed Node).

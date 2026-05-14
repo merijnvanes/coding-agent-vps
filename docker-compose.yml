@@ -47,11 +47,10 @@ services:
         target: /run/sockets
         read_only: false
 
-      # Per-CLI credential files — read-only from the sandbox side
-      - type: bind
-        source: /var/lib/agent-vps/agent-config/gcloud
-        target: /home/agent/.config/gcloud
-        read_only: true
+      # Non-secret sandbox config (the tooling Infisical project ID for the
+      # PATH shims) — bootstrap.sh writes sandbox-config.sh here, the sandbox
+      # shells source it via /etc/profile.d/agent-env.sh on start. No cloud-
+      # CLI tokens land here; those are fetched per-command by the shims.
       - type: bind
         source: /var/lib/agent-vps/agent-config/env
         target: /run/agent-env
@@ -75,8 +74,6 @@ services:
       # ssh-agent socket. See daemon/ssh-agent-bridge.service for why.
       # Must match entrypoint.sh.
       SSH_AUTH_SOCK: /run/sockets/ssh-agent-bridge.sock
-      # gcloud reads ADC from this path by default; set explicitly to be safe
-      GOOGLE_APPLICATION_CREDENTIALS: /home/agent/.config/gcloud/application_default_credentials.json
 
 volumes:
   sandbox-state:

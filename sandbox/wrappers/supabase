@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# sandbox/wrappers/supabase — PATH shim
+#
+# Wraps the real supabase binary in `infisical run --` so
+# SUPABASE_ACCESS_TOKEN is fetched from the coding-agent-vps-tooling
+# Infisical project at command-invocation time. See sandbox/wrappers/hcloud
+# for the full pattern + env var requirements.
+#
+# Real binary: /usr/local/bin/supabase
+
+set -euo pipefail
+
+: "${INFISICAL_TOOLING_PROJECT_ID:?INFISICAL_TOOLING_PROJECT_ID not set — host bootstrap.sh has not populated /run/agent-env/sandbox-config.sh, or this shell did not source /etc/profile.d/agent-env.sh}"
+: "${INFISICAL_ENV:=dev}"
+
+exec infisical run \
+    --projectId "$INFISICAL_TOOLING_PROJECT_ID" \
+    --env="$INFISICAL_ENV" \
+    -- /usr/local/bin/supabase "$@"
