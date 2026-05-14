@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
-# daemon/cred-daemon.sh — fetch credentials from Infisical, write to local cache
+# daemon/cred-daemon.sh — fetch host-side credentials from Infisical
+#
+# Scope: ONLY two credentials, both legitimately host-side:
+#   - github-ssh-key  → loaded into ssh-agent in the creds zone (signing
+#                       oracle for the sandbox via the bridged socket)
+#   - ntfy-topic      → written to a creds-owned file; the alert script reads it
+#
+# Cloud-CLI tokens (HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN, GCP_SA_KEY_JSON,
+# SUPABASE_ACCESS_TOKEN, etc.) do NOT pass through this daemon. They live in
+# the `coding-agent-vps-tooling` Infisical project and are fetched per-command
+# by sandbox-side PATH shims (sandbox/wrappers/) via `infisical run --`. The
+# host never sees those tokens at rest. See docs/ARCHITECTURE.md
+# "Per-CLI integration" for the full flow.
 #
 # What this does:
-#   1. Authenticate to Infisical with Universal Auth (clientId + clientSecret
-#      from /etc/agent-vps/infisical-uauth — the bootstrap secret).
-#   2. Fetch all secret values from the configured Infisical project + env.
-#   3. Write each secret to its designated location (see "Secret routing"
-#      block below). Files end up owned by the daemon's user (creds) since
-#      that's who's writing them — no chown needed.
-#   4. Missing secrets are skipped silently. Adding a secret to Infisical
-#      later, then restarting cred-daemon.service, enables that integration.
+#   1. Authenticate to the `coding-agent-vps` Infisical project with Universal
+#      Auth (clientId + clientSecret from /etc/agent-vps/infisical-uauth).
+#   2. Fetch all secret values from the configured project + env.
+#   3. Route github-ssh-key into ssh-agent + ntfy-topic into the creds zone.
+#   4. Missing secrets are skipped silently.
 #
 # What this does NOT do:
 #   - Mint, rotate, or call any upstream service's API. Upstream credential
 #     lifecycle is the user's responsibility (docs/REQUIREMENTS.md §5).
+#   - Fetch or write any sandbox-side / cloud-CLI / per-app secret. Those
+#     paths live entirely in the sandbox via `infisical run --`.
 #
 # Runs as user `creds` via cred-daemon.service. Triggered:
 #   - On boot (multi-user.target)
@@ -98,12 +109,31 @@ INFISICAL_URL="${INFISICAL_URL%/}"
 # === Ensure target directories exist with the right mode ===
 # Creds zone: 0700 — only daemon can read. Sandbox cannot reach.
 install -d -m 0700 "$CREDS_DIR"
-# Config zone: 0755 — sandbox bind-mounts these read-only; "other" needs
-# +x on the directory to traverse and +r on the files to read.
+# Config zone: 0755 — sandbox bind-mounts agent-config/env/ read-only.
+# "other" needs +x on the dir to traverse and +r on the files. Only file
+# bootstrap.sh writes here is sandbox-config.sh (non-secret config: the
+# tooling project ID for the sandbox PATH shims). The daemon doesn't write
+# anything to this dir but ensures it exists so the bind mount has something
+# to point at on a freshly-built VPS.
 install -d -m 0755 "$CONFIG_DIR"
 install -d -m 0755 "$CONFIG_DIR/env"
+# Empty placeholder dir so the docker-compose gcloud bind mount has a target.
+# Nothing is written here — gcloud auth comes from a per-command shim via
+# /dev/shm, not via this dir.
 install -d -m 0755 "$CONFIG_DIR/gcloud"
-install -d -m 0755 "$CONFIG_DIR/npm"
+
+# === Enforce steady state in the sandbox-mounted config dirs ===
+# agent-config/env/*.sh files are sourced into every sandbox shell by
+# /etc/profile.d/agent-env.sh, so an orphan *.sh would inject unintended
+# env vars. The only file the design expects here is sandbox-config.sh
+# (non-secret, the tooling Infisical project ID for the PATH shims).
+# Remove any other *.sh defensively.
+find "$CONFIG_DIR/env" -maxdepth 1 -type f -name '*.sh' \
+    ! -name 'sandbox-config.sh' -print -delete 2>/dev/null || true
+# Cloud-CLI tokens reach the sandbox per-command via shims, not via this
+# dir. Remove any credential file so a direct `/usr/bin/gcloud` invocation
+# bypassing the shim can't read a stale credential.
+rm -f "$CONFIG_DIR/gcloud/application_default_credentials.json" 2>/dev/null || true
 
 # === 1. Authenticate to Infisical ===
 # Body and Authorization header are passed via temp files (mode 0600) so the
@@ -160,14 +190,10 @@ fi
 
 # === 3. Write each integration's files (skip if secret missing) ===
 # Routing table:
-#   github-ssh-key     → CREDS_DIR/github-ssh-key (0600) + ssh-add into agent
-#   gcp-sa-key         → CONFIG_DIR/gcloud/application_default_credentials.json (0644)
-#   cloudflare-token   → CONFIG_DIR/env/cloudflare.sh   (0644, env-export)
-#   hcloud-token       → CONFIG_DIR/env/hetzner.sh       (0644, env-export)
-#   ntfy-topic         → CREDS_DIR/ntfy-topic            (0600)
-# (Publishing tokens — npm/PyPI/Docker Hub — intentionally NOT scaffolded in v1.
-#  The 0.1% of users who actually publish from the agent VPS can wire it up
-#  themselves — pattern matches cloudflare-token / hcloud-token.)
+#   github-ssh-key  → CREDS_DIR/github-ssh-key (0600) + ssh-add into agent
+#   ntfy-topic      → CREDS_DIR/ntfy-topic     (0600)
+# Cloud-CLI tokens live in `coding-agent-vps-tooling` and are fetched
+# per-command by sandbox-side shims — not by this daemon.
 
 # --- github-ssh-key (private key + load into ssh-agent) ---
 # Validate the new key BEFORE clearing the agent. If validation fails, keep
@@ -192,26 +218,6 @@ if val=$(secret_value github-ssh-key) && [[ -n "$val" ]]; then
     log "ERROR: new github-ssh-key fails ssh-keygen validation; keeping previous key"
     alert "cred-daemon" "Invalid SSH key in Infisical github-ssh-key; ignored"
   fi
-fi
-
-# --- gcp-sa-key (service account JSON, file-read at each gcloud invocation) ---
-if val=$(secret_value gcp-sa-key) && [[ -n "$val" ]]; then
-  log "writing gcp-sa-key"
-  atomic_write "$CONFIG_DIR/gcloud/application_default_credentials.json" 0644 "$val"
-fi
-
-# --- cloudflare-token (env-export, footgun: stale in running shells) ---
-if val=$(secret_value cloudflare-token) && [[ -n "$val" ]]; then
-  log "writing cloudflare env-export"
-  atomic_write "$CONFIG_DIR/env/cloudflare.sh" 0644 \
-    "export CLOUDFLARE_API_TOKEN=$(quote "$val")"
-fi
-
-# --- hcloud-token (env-export, apps-scope) ---
-if val=$(secret_value hcloud-token) && [[ -n "$val" ]]; then
-  log "writing hetzner env-export"
-  atomic_write "$CONFIG_DIR/env/hetzner.sh" 0644 \
-    "export HCLOUD_TOKEN=$(quote "$val")"
 fi
 
 # --- ntfy-topic (creds zone; only the alert script reads this) ---
