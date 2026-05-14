@@ -17,25 +17,33 @@ Concrete component layout and data flows for the system specified in [REQUIREMEN
    │  └──────────────────────────────────────────────────┘ │
    │                                                       │
    │  ┌─ CREDS ZONE (user: creds) ──────────────────────┐  │
-   │  │  cred-daemon  ssh-agent  credential helpers     │  │
+   │  │  cred-daemon  ssh-agent  ntfy publisher         │  │
    │  │  /etc/agent-vps/infisical-uauth      (0600)     │  │
-   │  │  /var/lib/agent-vps/creds/*          (0600)     │  │
+   │  │  /var/lib/agent-vps/creds/github-ssh-key (0600) │  │
+   │  │  /var/lib/agent-vps/creds/ntfy-topic     (0600) │  │
    │  └─────────────────┬────────────────────────────────┘ │
-   │                    │ unix sockets only                │
+   │                    │ ssh-agent socket bridge          │
    │                    ▼  (raw key material does NOT      │
    │                       cross this boundary)            │
    │  ┌─ SANDBOX ZONE (rootless Docker container) ──────┐  │
    │  │  Claude Code, Codex (OAuth), tmux               │  │
    │  │  Node+pnpm, Python+uv                           │  │
-   │  │  wrangler, gcloud, hcloud                       │  │
+   │  │  PATH shims (/opt/agent-vps-wrappers/) for      │  │
+   │  │    hcloud, wrangler, gcloud, supabase           │  │
    │  │  /work  ←  mounted from /srv/dev/projects       │  │
-   │  └──────────────────────────────────────────────────┘ │
-   └────────┬──────────────────────────┬───────────────────┘
-            │                          │
-            │ HTTPS                    │ HTTPS (unrestricted egress)
-            ▼                          ▼
-       Infisical                  GitHub · GCP · Cloudflare · Hetzner
-       (daily fetch)              npm · pypi · Anthropic · OpenAI · …
+   │  └────────────────────┬─────────────────────────────┘ │
+   └────────┬──────────────┼─────────────────┬─────────────┘
+            │              │                 │
+       HTTPS│         HTTPS│            HTTPS│ (unrestricted egress)
+            ▼              ▼                 ▼
+   Infisical               Infisical    GitHub · GCP · Cloudflare · Hetzner
+   (coding-agent-vps       (coding-agent npm · pypi · Anthropic · OpenAI · …
+    project — host-side     -vps-tooling
+    creds, daily fetch by   + per-app
+    cred-daemon)            projects —
+                            sandbox fetches
+                            per-command via
+                            `infisical run --`)
 ```
 
 ## Hetzner project topology
@@ -45,9 +53,9 @@ The agent VPS lives in its **own dedicated Hetzner Cloud project** (e.g. `coding
 | Token | Scope | Where it lives | What it can do |
 |---|---|---|---|
 | **Admin token** for `coding-agent-vps` project | full admin on the agent-vps project (this VPS, its firewall, its volumes) | Laptop only — kept in password manager, never enters the VPS | Provision/destroy the VPS, attach firewall, killswitch backstop |
-| **Agent token** for user's apps project(s) | full access within those projects only | Stored in Infisical, fetched by cred-daemon, mounted into sandbox as `HCLOUD_TOKEN` | Deploy and manage app resources for the user's actual workloads |
+| **Agent token** for user's apps project(s) | full access within those projects only | Stored in the `coding-agent-vps-tooling` Infisical project. Fetched per-command by the `hcloud` PATH shim in the sandbox via `infisical run --`; never persists on the VPS at rest. | Deploy and manage app resources for the user's actual workloads |
 
-Cross-project isolation is at the Hetzner API level: the agent's `HCLOUD_TOKEN` doesn't have any permissions in the `coding-agent-vps` project — even a fully compromised agent cannot list, modify, or delete the agent-vps VPS itself.
+Cross-project isolation is at the Hetzner API level: the agent's Hetzner token doesn't have any permissions in the `coding-agent-vps` Hetzner project — even a fully compromised agent cannot list, modify, or delete the agent-vps VPS itself.
 
 **Scaling pattern**: if a future project needs an isolated VPS (per REQUIREMENTS.md §3), it gets its own Hetzner project. Each VPS lives behind its own admin-token boundary.
 
@@ -63,18 +71,21 @@ Three zones on the VPS, three trust levels.
 
 ### Creds zone (user `creds`)
 
-- **Owns**: cred-daemon (systemd service), Infisical Universal Auth bootstrap secret, daily-refreshed derived secrets, ssh-agent process, credential-helper sockets
-- **Talks to outside**: HTTPS to Infisical only (to fetch credential values). Does not call upstream APIs — credential lifecycle at the upstream is the user's responsibility per REQUIREMENTS.md §5.
-- **Talks to sandbox**: only via unix sockets that vend signatures/tokens on demand — never raw key material
-- **Trust**: highest — holds everything sensitive
+- **Owns**: cred-daemon (systemd service), Infisical Universal Auth bootstrap secret, ssh-agent process, ntfy publisher
+- **Holds**: the GitHub SSH private key (loaded into ssh-agent) and the ntfy topic (read by the alert script). That's it — other cloud-CLI tokens never enter this zone.
+- **Talks to outside**: HTTPS to the `coding-agent-vps` Infisical project (to refresh `github-ssh-key` and `ntfy-topic`), plus HTTPS to `ntfy.sh` from the alert script on cred-daemon failures. Does not call upstream APIs for credential lifecycle management — that's the user's responsibility per REQUIREMENTS.md §5.
+- **Talks to sandbox**: only via the bridged ssh-agent unix socket — a signing oracle, never raw key material.
+- **Trust**: highest — holds the raw GitHub SSH key.
 
 ### Sandbox zone (rootless Docker container)
 
-- **Owns**: Claude Code, Codex, project working files, language runtimes, deploy CLIs, tmux
-- **Talks to outside**: unrestricted HTTPS egress (per §5 — matches laptop parity)
-- **Talks to creds zone**: only via mounted sockets (ssh-agent + credential helpers)
-- **Cannot reach**: host zone files, creds zone files, /etc/agent-vps, /var/lib/agent-vps/creds, /opt/agent-vps
-- **Trust**: lowest — agent runs in YOLO mode here
+- **Owns**: Claude Code, Codex, project working files, language runtimes, PATH shims for cloud CLIs (hcloud, wrangler, gcloud, supabase), tmux.
+- **Talks to outside**:
+  - Unrestricted HTTPS egress (per REQUIREMENTS.md §5 — matches laptop parity).
+  - HTTPS to Infisical for the `coding-agent-vps-tooling` project (account-wide cloud-CLI tokens) and per-app projects (project-specific app secrets). One fetch per CLI invocation, via `infisical run --`. Tokens enter the subprocess environment for the duration of one command, never persist on disk inside the sandbox.
+- **Talks to creds zone**: only via the bridged ssh-agent socket.
+- **Cannot reach**: host zone files, creds zone files (`/etc/agent-vps`, `/var/lib/agent-vps/creds`), `/opt/agent-vps`.
+- **Trust**: lowest — agent runs in YOLO mode here. Token exposure is bounded to one subprocess's lifetime.
 
 ## Components
 
@@ -82,9 +93,9 @@ Three zones on the VPS, three trust levels.
 |---|---|---|
 | Tailscale daemon | host | Ingress (Tailscale-only, deny-all ACL) + outbound mesh |
 | Docker engine | host | Container runtime, configured for rootless |
-| cred-daemon | creds | Fetches credentials from Infisical (at host boot, daily via systemd timer, and on manual `systemctl start`), routes them to per-CLI files, alerts on failure |
+| cred-daemon | creds | Fetches host-side credentials (`github-ssh-key`, `ntfy-topic`) from the `coding-agent-vps` Infisical project. Runs at host boot, daily via systemd timer, and on manual `systemctl start`. Loads `github-ssh-key` into ssh-agent and writes `ntfy-topic` for the alert script. Alerts on failure. |
 | ssh-agent | creds | Signs git/ssh challenges originating in sandbox (true signing oracle — private key never leaves creds zone) |
-| Per-CLI credential shims | creds | Bespoke per upstream CLI; see "Per-CLI integration" below |
+| PATH shims | sandbox | One executable per cloud CLI at `/opt/agent-vps-wrappers/` (first in `$PATH`). Wraps the real binary in `infisical run -- ...` so the secret lands in the subprocess env for one command. See "Per-CLI integration" below. |
 | Sandbox container | sandbox | Runs the agent + project work |
 | ntfy publisher | creds | Pushes alerts to phone (free tier of ntfy.sh) |
 
@@ -104,34 +115,68 @@ Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop pari
 
 ## Per-CLI integration
 
-There is no single "credential socket protocol." Each non-SSH CLI consumes credentials from a different place. The cred-daemon writes the appropriate config file or env-export from Infisical-fetched values:
+Two patterns, picked per credential.
 
-| CLI | Where it reads creds | What cred-daemon writes |
-|---|---|---|
-| `git` (SSH) | `SSH_AUTH_SOCK` | ssh-agent socket — signing oracle, no raw key in sandbox |
-| `gcloud` | `~/.config/gcloud/application_default_credentials.json` | daemon writes to `/var/lib/agent-vps/agent-config/gcloud/application_default_credentials.json`; bind-mounted read-only into sandbox at the expected path |
-| `wrangler` | `CLOUDFLARE_API_TOKEN` env var | daemon writes `/var/lib/agent-vps/agent-config/env/cloudflare.sh`; container entrypoint sources it on shell start. Footgun: running shells keep stale value until re-source (see Daily refresh flow step 5) |
-| `hcloud` | `HCLOUD_TOKEN` env var (apps-only scope, no VPS-management) | daemon writes `/var/lib/agent-vps/agent-config/env/hetzner.sh`; same sourcing pattern as wrangler |
+### Host-routed (ssh-agent only)
 
-(npm / PyPI / Docker Hub publishing not scaffolded in v1. The pattern for any added integration matches `cloudflare-token` or `hcloud-token` — fetch from Infisical, write an env-export or config file under `agent-config/`, bind into the sandbox.)
+`git` over SSH uses `SSH_AUTH_SOCK` pointing at the ssh-agent bridge socket. The agent runs in the creds zone with `github-ssh-key` loaded by cred-daemon. The sandbox sees signing-oracle behavior — the private key never crosses the zone boundary. This is the strongest credential pattern in the system.
 
-All of these except SSH put the raw bearer token somewhere the sandbox process can read at use-time. SSH via ssh-agent is the only true signing oracle (private key never enters the sandbox). For `git` operations we use SSH only; the agent does not have `gh` or any other GitHub API tooling in-sandbox — those operations happen from the laptop instead.
+### Sandbox-fetched, per-command (everything else)
 
-## Daily refresh flow
+The sandbox has PATH shims at `/opt/agent-vps-wrappers/` (first in `$PATH`) for every cloud CLI that needs an account-wide token: `hcloud`, `wrangler`, `gcloud`, `supabase`. Each shim does roughly:
 
-systemd timer (`cred-daemon.timer`, OnCalendar=04:00 UTC daily, Persistent=true) in the creds zone, executed as `creds` user. Also runs at host boot (`cred-daemon.service` is `WantedBy=multi-user.target`) and on demand via `systemctl start cred-daemon`. There is no sandbox-container-startup hook — credential availability for the sandbox comes from the cached on-disk files written by the daemon, which are bind-mounted into the container.
+```bash
+exec infisical run \
+    --projectId "$INFISICAL_TOOLING_PROJECT_ID" \
+    --env="$INFISICAL_ENV" \
+    -- <real-binary-abspath> "$@"
+```
 
-1. cred-daemon reads bootstrap secret from `/etc/agent-vps/infisical-uauth`
-2. Authenticates to Infisical Universal Auth → receives short-lived access token
-3. Fetches current credential values from Infisical for each entry the daemon manages
-4. For each value that changed since last refresh: write to `/var/lib/agent-vps/creds/<name>` (mode 0600, owner `creds:creds`), reload the corresponding helper (e.g. `ssh-add -d <old>` + `ssh-add <new>` for SSH keys)
-5. Propagation to the sandbox depends on the credential type:
-   - **SSH** (socket-served): next signing request sees the new key — no restart needed.
-   - **File-based creds** (e.g. gcloud ADC at `~/.config/gcloud/...`): next CLI invocation reads the new value — no restart needed.
-   - **`CLOUDFLARE_API_TOKEN`, `HCLOUD_TOKEN`** (env vars sourced at shell start): running tmux sessions keep stale values until the shell re-sources its env-export or is restarted. Document this as a known footgun; users should `exec $SHELL` or detach/reattach tmux after a known rotation.
-6. On Infisical authentication or fetch failure: publish to ntfy topic
+`infisical run --` exports each fetched secret as an env var with the **same name** as the secret in Infisical — so the secrets are stored under the env-var names the CLIs already read (uppercase, underscores). The token lands in the subprocess environment for the duration of one command, then gone. No persistent on-disk copy inside the sandbox. PATH shims (not shell functions) so every caller is wrapped — interactive shells, the agent's own `subprocess.Popen`, cron, `bash -c '...'`, all of them.
 
-The cred-daemon does **not** mint, rotate, or otherwise call any upstream service's API. All credential lifecycle management at the upstream (GitHub, GCP, Cloudflare, Hetzner, npm, etc.) is the user's responsibility — see REQUIREMENTS.md §5. The cred-daemon's job is "keep the local cache in sync with Infisical."
+| CLI | Real binary path | Secret name in `coding-agent-vps-tooling` | Receives via |
+|---|---|---|---|
+| `hcloud` | `/usr/local/bin/hcloud` | `HCLOUD_TOKEN` | env var, set by `infisical run --` |
+| `wrangler` | `/usr/local/pnpm/bin/wrangler` | `CLOUDFLARE_API_TOKEN` | env var, set by `infisical run --` |
+| `supabase` | `/usr/local/bin/supabase` | `SUPABASE_ACCESS_TOKEN` | env var, set by `infisical run --` |
+| `gcloud` | `/usr/bin/gcloud` | `GCP_SA_KEY_JSON` (the JSON content as a single secret value) | Shim writes `$GCP_SA_KEY_JSON` to `/dev/shm/<random>` (tmpfs, mode 0600), exports `GOOGLE_APPLICATION_CREDENTIALS` pointing at it, runs gcloud, deletes the temp on `EXIT`/`HUP`/`INT`/`TERM`. The gcloud shim wraps the `infisical run --` invocation with the file dance — not vanilla `infisical run`. |
+
+Authentication to Infisical from the sandbox is interactive: `infisical login` once per container (device-code OAuth flow). The resulting session token lives at `~/.infisical/login/` inside the container, which is ephemeral by container-state policy — gone on rebuild, requires re-login. This is the friction we accept in exchange for not persisting any tooling secrets on the VPS at rest.
+
+### Per-app projects
+
+App-specific secrets (database URLs, anon keys, app-scoped API tokens) live in a per-app Infisical project (e.g. `dobudex`). In the project directory under `/work`, agents invoke commands via `infisical run --env=dev -- <cmd>`, which auto-detects the project from `.infisical.json` (committed to the repo) or from `infisical init`. Same trust model as the tooling project — secret in subprocess env for one command, never on disk.
+
+(npm / PyPI / Docker Hub publishing not scaffolded in v1. The pattern for any added integration: secret in the `coding-agent-vps-tooling` Infisical project, plus a new shim at `/opt/agent-vps-wrappers/<cli>` that does `infisical run -- <real-binary-abspath> "$@"`.)
+
+## Refresh flow
+
+Two parallel paths — one for host-side credentials, one for sandbox-side.
+
+### Host-side: cred-daemon (creds zone)
+
+systemd timer (`cred-daemon.timer`, `OnCalendar=04:00 UTC` daily, `Persistent=true`), runs as `creds`. Also at host boot (`WantedBy=multi-user.target`) and on demand (`systemctl start cred-daemon`). The daemon's scope is just two credentials, both legitimately host-side:
+
+1. Reads bootstrap secret from `/etc/agent-vps/infisical-uauth`.
+2. Authenticates to the `coding-agent-vps` Infisical project via Universal Auth.
+3. Fetches `github-ssh-key` and `ntfy-topic`.
+4. `github-ssh-key`: validates with `ssh-keygen -y`, then `ssh-add -D` + `ssh-add <new>` against the creds-owned agent. The next signing request from the sandbox (via the bridged socket) sees the new key — no sandbox restart needed.
+5. `ntfy-topic`: written to `/var/lib/agent-vps/creds/ntfy-topic` (mode 0600). The alert script reads it on each invocation.
+6. On Infisical authentication or fetch failure: publish to ntfy topic.
+
+The cred-daemon does **not** mint, rotate, or otherwise call any upstream service's API. All credential lifecycle management at the upstream is the user's responsibility — see REQUIREMENTS.md §5. The cred-daemon's job is "keep the local host-side cache in sync with Infisical."
+
+### Sandbox-side: per-command via `infisical run --`
+
+For every cloud CLI invocation (`hcloud`, `wrangler`, `gcloud`, `supabase`, and any per-app secret consumption), the relevant Infisical project is hit at command-time:
+
+1. Shell calls `hcloud server list`. PATH resolves to `/opt/agent-vps-wrappers/hcloud`.
+2. The shim execs `infisical run --projectId $INFISICAL_TOOLING_PROJECT_ID --env=dev -- /usr/local/bin/hcloud server list`.
+3. `infisical run` fetches the secret named `HCLOUD_TOKEN` from the `coding-agent-vps-tooling` project, sets it as an env var of the same name in the child process, execs the real hcloud.
+4. Real hcloud reads `HCLOUD_TOKEN`, makes its API call, exits.
+5. Child process gone, env gone, no on-disk trace.
+
+Rotation is immediate: change the value in Infisical → next CLI invocation picks it up. No daemon timer, no sandbox restart, no "stale env in running shell" footgun (since the env is only set per-subprocess, not in any persistent shell).
 
 ## Rebuild flow
 
@@ -155,19 +200,16 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 
 ```
 /etc/agent-vps/
-  infisical-uauth          0600  creds:creds   # bootstrap secret (client id+secret)
+  infisical-uauth          0600  creds:creds   # bootstrap secret for `coding-agent-vps` project (client id+secret)
   config.env               0644  root:root     # cred-daemon config (project ID, env slug, URL)
 
 /var/lib/agent-vps/
   creds/                                       # raw key material — sandbox cannot see this
     github-ssh-key         0600  creds:creds   # loaded into ssh-agent at refresh
     ntfy-topic             0600  creds:creds   # only the alert script reads this
-  agent-config/                                # per-CLI config files; bind-mounted read-only into the sandbox
-    gcloud/
-      application_default_credentials.json  0644  creds:creds  # → /home/agent/.config/gcloud/...
+  agent-config/                                # bind-mounted into the sandbox
     env/
-      cloudflare.sh                         0644  creds:creds  # sourced by entrypoint → CLOUDFLARE_API_TOKEN
-      hetzner.sh                            0644  creds:creds  # sourced by entrypoint → HCLOUD_TOKEN (apps-only)
+      sandbox-config.sh                     0644  creds:creds  # `export INFISICAL_TOOLING_PROJECT_ID=…` + `INFISICAL_ENV=…` for the shims
   sockets/                                     # mounted into sandbox; 0755 dir, 0666 socket files
     ssh-agent.sock         0666  creds:creds   # raw ssh-agent — cred-daemon uses this directly
     ssh-agent-bridge.sock  0666  creds:creds   # socat relay — sandbox uses this (UID-namespace bridge)
@@ -182,6 +224,16 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
     Dockerfile                                  # built on the VPS via `docker build` at cloud-init time
     entrypoint.sh                               # container entrypoint: sets SSH_AUTH_SOCK + exec tmux
     profile.d-agent-env.sh                      # sourced by interactive shells inside the container
+    wrappers/                                   # PATH shims (hcloud, wrangler, gcloud, supabase) baked into image
+```
+
+**Inside the sandbox container:**
+```
+/opt/agent-vps-wrappers/         # first in $PATH
+  hcloud, wrangler, gcloud, supabase            # executable shims; exec `infisical run -- <real-binary>`
+/usr/local/bin/hcloud, /usr/local/bin/supabase  # real binaries (NOT first in $PATH for the wrapped tools)
+/usr/local/pnpm/bin/wrangler                    # real binary
+/usr/bin/gcloud                                 # real binary (apt-installed)
 ```
 
 **Named Docker volumes** (host-side path varies by Docker storage driver; persist across container recreation):
@@ -191,12 +243,11 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 
 **Sandbox mounts (rootless Docker):**
 - `/var/lib/agent-vps/sockets/` → `/run/sockets/` (socket mode 0666; the sandbox connects to `ssh-agent-bridge.sock`, not the raw `ssh-agent.sock` — see daemon/ssh-agent-bridge.service for why)
-- `/var/lib/agent-vps/agent-config/gcloud/` → `/home/agent/.config/gcloud/` (read-only)
-- `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; `/etc/profile.d/agent-env.sh` sources `*.sh` on shell start to set env-var creds)
+- `/var/lib/agent-vps/agent-config/env/` → `/run/agent-env/` (read-only; `/etc/profile.d/agent-env.sh` sources `*.sh` on shell start, picking up `INFISICAL_TOOLING_PROJECT_ID` + `INFISICAL_ENV` for the PATH shims)
 - Named volumes (above) for `~/.claude`, `~/.codex`, `~/.local/state/agent-state`
 - `/srv/dev/projects/` → `/work` (rw)
 
-**Sandbox does NOT mount:** anything under `/etc/agent-vps/`, `/var/lib/agent-vps/creds/`, or `/opt/agent-vps/`.
+**Sandbox does NOT mount:** anything under `/etc/agent-vps/`, `/var/lib/agent-vps/creds/`, or `/opt/agent-vps/`. The Infisical Universal Auth bootstrap secret stays in the creds zone exclusively.
 
 ## Alerting
 
@@ -231,5 +282,7 @@ Tracking back to REQUIREMENTS.md residuals and non-goals:
 - Does not gate any specific action (per-action approval, deploy approval, protected branches) — by design (§1 principle).
 - Does not protect against a laptop compromise reaching the VPS over Tailscale (§2 out of scope).
 - Does not provide GitHub API access from the sandbox (no `gh` CLI, no PAT). Git operations use SSH only (signing oracle, no bearer token in sandbox); PR creation, issues, and CI status happen from the laptop.
+- Does not provide unattended sandbox-side cloud-CLI access. The sandbox needs an `infisical login` (interactive device-code OAuth) once per container, expiring with container rebuild. Cron jobs / background tasks inside the sandbox that need cloud APIs will fail until a human re-logs in. Trade for not persisting any tooling secret on the VPS at rest.
+- Does not isolate the `coding-agent-vps-tooling` and per-app Infisical projects from each other inside the sandbox: a single human Infisical identity sees both. The scope split is for blast-radius and rotation cadence, not within-sandbox isolation.
 
 These are explicit choices, not gaps.

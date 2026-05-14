@@ -19,44 +19,55 @@ persists across SSH disconnects.
 Detach tmux with `Ctrl-b d`. Mouse-wheel scrollback works (mouse mode
 is on by default).
 
+## Using the sandbox cloud CLIs
+
+`hcloud`, `wrangler`, `gcloud`, and `supabase` are wrapped by PATH shims at `/opt/agent-vps-wrappers/`. Each shim transparently fetches the matching token from the `coding-agent-vps-tooling` Infisical project at command-time and injects it into the subprocess environment for that one invocation. The token never persists on disk inside the sandbox.
+
+Once per container, log in to Infisical:
+
+```bash
+infisical login    # device-code OAuth — opens a URL on the laptop, paste the code back
+```
+
+Then use the CLIs normally:
+
+```bash
+hcloud server list                        # HCLOUD_TOKEN fetched per-command, in env for one subprocess
+wrangler deploy                           # CLOUDFLARE_API_TOKEN, same pattern
+supabase db push                          # SUPABASE_ACCESS_TOKEN, same pattern
+gcloud auth list                          # GCP SA JSON, written to /dev/shm temp file, deleted on exit
+```
+
+**Don't `supabase login` (or any "login" inside these CLIs).** That writes their token to `~/.supabase/access-token` / equivalent paths on disk, persisting across the container lifetime. The shims keep tokens in process memory only.
+
+`infisical login` writes a session token to `~/.infisical/` inside the container, which persists for the container's lifetime — so subsequent shim invocations don't re-prompt — but is NOT on a named volume. The whole `~/.infisical/` directory is discarded on `docker compose up -d --build` or a full VPS rebuild. After a rebuild, `infisical login` again.
+
+The trade is precise: no **cloud-provider** tokens (Hetzner, Cloudflare, GCP, Supabase) at rest inside the sandbox. An **Infisical session credential** lives in `~/.infisical/` for the container's lifetime; that's how the shims can authenticate without prompting on every command. The session is scoped to your personal Infisical identity, can be revoked from the Infisical admin UI, and dies on rebuild.
+
 ## Using your app's secrets inside the sandbox
 
-When you're iterating on a code project under `/work` that has its own
-Infisical workspace, use the `infisical` CLI to fetch that project's env
-vars at runtime — no need to ever copy them onto the VPS.
+For app-specific secrets (database URLs, anon keys, app-scoped API keys), each app gets its own Infisical project (e.g. `dobudex`). Inside the project directory under `/work`, prefix the command with `infisical run --env=dev --`:
 
 ```bash
 cd /work/<your-project>
-infisical login                              # opens device-code flow
 infisical run --env=dev -- npm start         # or pnpm / uv run / etc.
 ```
 
-The same pattern applies to per-project CLIs that read auth from an env
-var. Supabase CLI is the canonical example — store the access token as
-`SUPABASE_ACCESS_TOKEN` in the project's Infisical workspace and invoke:
+`infisical run` reads `.infisical.json` in the current directory (committed in the project repo, points at the right Infisical project), fetches the secrets, sets them in the subprocess env, runs the command. Same trust model as the cloud-CLI shims — secret in process memory for one command, never on disk.
+
+If the project doesn't have `.infisical.json` yet:
 
 ```bash
-infisical run --env=dev -- supabase db push
-infisical run --env=dev -- supabase functions deploy <name>
+cd /work/<your-project>
+infisical init                # interactive — pick the Infisical project + env, writes .infisical.json
 ```
 
-**Don't `supabase login` inside the sandbox.** That writes the token
-to `~/.supabase/access-token` on disk, which persists across the
-container lifetime and is readable by anything running as the agent
-user. The env-var path keeps the token in process memory only — gone
-when the command exits.
+The Infisical projects you log into from this sandbox are scoped per use:
 
-`infisical login` state is **not** persisted across container rebuilds
-(unlike Claude/Codex OAuth, which use named volumes). After
-`docker compose up -d --build` or a full VPS rebuild, log in again.
-This is intentional: sandbox state is ephemeral, the CLIs themselves
-are reinstalled automatically from the Dockerfile, and the only friction
-on rebuild is re-auth — never reinstall.
+- `coding-agent-vps-tooling` — account-wide cloud-CLI tokens (consumed by PATH shims)
+- Per-app projects (`dobudex`, etc.) — app-specific secrets (consumed by `infisical run --` from the project dir)
 
-This uses a different Infisical identity from the `agent-vps`
-operational wallet (which the host-side cred-daemon fetches and
-bind-mounts as files into `/run/agent-env/`). The two don't see each
-other's secrets.
+The third project, `coding-agent-vps`, holds the host-side credentials managed by cred-daemon on the VPS host. cred-daemon uses its own Universal Auth identity for it. No sandbox infrastructure (no shim, no `.infisical.json` in any project dir) is configured to read from `coding-agent-vps` — though your personal Infisical login inside the sandbox technically has Viewer access to all three projects under your account. The split is organizational (rotation cadence, blast radius on revocation), not a hard isolation boundary inside the sandbox.
 
 ## Exposing a sandbox dev server
 
@@ -132,21 +143,24 @@ deps locally — not a new class of risk, covered by
 ## Rotating credentials
 
 Per [REQUIREMENTS.md §5](./REQUIREMENTS.md#5-security-requirements),
-credential rotation is the **user's** responsibility — the daemon only
+credential rotation is the **user's** responsibility — the system only
 fetches the current value from Infisical.
 
-To rotate:
+**Sandbox-side credentials** (cloud-CLI tokens in `coding-agent-vps-tooling`, app secrets in per-app projects):
 
-1. Update the value in Infisical (web UI).
+1. Update the value in the Infisical UI.
+2. Next CLI invocation picks it up — every `hcloud`/`wrangler`/`gcloud`/`supabase` invocation and every `infisical run --` fetches fresh. No daemon restart, no shell re-source, no running-tmux footgun.
+
+**Host-side credentials** (`github-ssh-key`, `ntfy-topic` in `coding-agent-vps`):
+
+1. Update the value in the Infisical UI.
 2. SSH into the VPS and run:
    ```bash
    sudo systemctl start cred-daemon
    ```
-   to pull the new value immediately. Or wait for the daily 04:00 UTC
-   refresh.
-3. For env-var credentials (`CLOUDFLARE_API_TOKEN`, `HCLOUD_TOKEN`,
-   etc.): existing tmux windows keep the stale value until you open a
-   new tmux window or run `exec $SHELL`.
+   to pull the new value immediately. Or wait for the daily 04:00 UTC refresh.
+
+   For `github-ssh-key`: cred-daemon swaps it into ssh-agent on success; sandbox's next signing request uses the new key.
 
 ## Adding push alerts later
 
@@ -231,8 +245,16 @@ cd /opt/agent-vps && docker compose up -d --build
 ```
 
 Named volumes (`sandbox-state-claude`, `sandbox-state-codex`) persist —
-no OAuth re-login. Your tmux session is killed on container recreation
-(it's a process inside the container); reattach afterward.
+no Claude/Codex OAuth re-login needed. Your tmux session is killed on
+container recreation (it's a process inside the container); reattach
+afterward.
+
+The `infisical login` session does NOT persist across rebuilds (no
+named volume — intentional, the sandbox holds no long-lived secret
+material at rest). After every container rebuild, run `infisical login`
+again inside the new tmux session before any cloud-CLI commands. Until
+you do, `hcloud` / `wrangler` / `gcloud` / `supabase` and any
+`infisical run --` invocation will fail with "Not logged in."
 
 ### Full VPS rebuild
 
