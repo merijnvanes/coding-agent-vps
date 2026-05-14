@@ -43,6 +43,77 @@ operational wallet (which the host-side cred-daemon fetches and
 bind-mounts as files into `/run/agent-env/`). The two don't see each
 other's secrets.
 
+## Exposing a sandbox dev server
+
+To view a dev server running inside the sandbox (Vite, Next.js,
+Flutter web, Django, etc.) from your laptop's browser, use SSH port
+forwarding:
+
+```bash
+# From the laptop
+ssh -L 3000:127.0.0.1:3000 dev@coding-agent-vps
+# Then open http://localhost:3000 in the laptop browser.
+```
+
+`docker-compose.yml` pre-publishes a few port ranges on the VPS host's
+loopback so you don't have to edit it per project:
+
+| Range | Typical use |
+|---|---|
+| 3000-3009 | Next.js, Rails, Express, generic Node |
+| 5170-5179 | Vite |
+| 8000-8089 | Flutter web, Django, Python, webpack-dev-server |
+
+If you need a port outside these ranges, add it to `docker-compose.yml`
+— **keep the `127.0.0.1:` prefix**, or the port becomes reachable on
+the tailnet (see comment in `docker-compose.yml`).
+
+### Bind to `0.0.0.0` inside the container
+
+Most dev servers default to listening on `127.0.0.1` *inside the
+container* — that's the container's own loopback, which Docker's port
+forwarder cannot reach. Override the bind address:
+
+```bash
+# Vite
+pnpm dev --host 0.0.0.0
+# Next.js
+pnpm next dev -H 0.0.0.0
+# Flutter web
+flutter run -d web-server --web-hostname=0.0.0.0 --web-port=8080
+# Django
+python manage.py runserver 0.0.0.0:8000
+```
+
+If your SSH tunnel succeeds but the browser sees "connection refused"
+or hangs, the container-side bind is the most common cause.
+
+### Verify the loopback-only binding (one-time, after any compose change)
+
+On the VPS:
+
+```bash
+ss -tlnp | grep ':3000'
+```
+
+Must show `127.0.0.1:3000`, not `0.0.0.0:3000` or `*:3000`. Anything
+other than `127.0.0.1:` means the port is exposed on the tailnet —
+stop and check that the `127.0.0.1:` prefix in `docker-compose.yml`
+wasn't dropped.
+
+### Browser-trust caveat
+
+A tunneled `localhost:3000` shares cookie space with anything else on
+your laptop's `localhost:*`. If you have a sensitive site open in
+another tab at `localhost:<port>`, the sandbox dev server can read or
+write its cookies. Treat a sandbox dev server like any unaudited
+local code — don't run it alongside trusted local dev surfaces.
+
+A compromised in-sandbox agent could serve poisoned JS to the laptop
+browser via this path. That's identical to running compromised npm
+deps locally — not a new class of risk, covered by
+[REQUIREMENTS.md §2](./REQUIREMENTS.md).
+
 ## Rotating credentials
 
 Per [REQUIREMENTS.md §5](./REQUIREMENTS.md#5-security-requirements),

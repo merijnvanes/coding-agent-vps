@@ -22,6 +22,24 @@ services:
     stdin_open: true
     tty: true
 
+    # Host-loopback dev-server ports — reachable ONLY via SSH port forwarding
+    # from the laptop:
+    #     ssh -L 3000:127.0.0.1:3000 dev@coding-agent-vps
+    #
+    # The "127.0.0.1:" prefix on every line is load-bearing. Without it,
+    # rootless Docker binds 0.0.0.0:PORT on the host; ufw's "allow in on
+    # tailscale0" rule then lets any tailnet peer reach the port, defeating
+    # the access model. The three ingress-deny layers (Hetzner FW, ufw,
+    # Tailscale ACL) govern external NICs; loopback is exempt by design,
+    # which is what makes SSH `-L` work. See docs/USAGE.md "Exposing a
+    # sandbox dev server" for the recipe + verification.
+    #
+    # ⚠ DO NOT remove the "127.0.0.1:" prefix on any of these lines.
+    ports:
+      - "127.0.0.1:3000-3009:3000-3009"   # Next.js / Rails / Express / generic Node
+      - "127.0.0.1:5170-5179:5170-5179"   # Vite
+      - "127.0.0.1:8000-8089:8000-8089"   # Flutter web / Django / Python / webpack-dev-server
+
     volumes:
       # Sockets (ssh-agent) — read+write on the *socket inode*, no unlink
       - type: bind

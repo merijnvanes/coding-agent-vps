@@ -100,6 +100,8 @@ Ingress is blocked at three deny-by-default layers, configured during cloud-init
 
 Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity).
 
+**Sandbox dev-server ports are exempt by design.** `docker-compose.yml` publishes a few port ranges (3000-3009, 5170-5179, 8000-8089) bound to `127.0.0.1` on the VPS host. They sit on the loopback interface, not on `eth0` or `tailscale0`, so the three deny layers above don't see them and don't need to — the only path that can reach them is SSH port forwarding from a Tailscale-authenticated laptop session, which is already the access model. See [USAGE.md "Exposing a sandbox dev server"](./USAGE.md#exposing-a-sandbox-dev-server).
+
 ## Per-CLI integration
 
 There is no single "credential socket protocol." Each non-SSH CLI consumes credentials from a different place. The cred-daemon writes the appropriate config file or env-export from Infisical-fetched values:
