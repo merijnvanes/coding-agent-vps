@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# sandbox/wrappers/gcloud — PATH shim with /dev/shm temp file
+#
+# gcloud authenticates from a JSON file at GOOGLE_APPLICATION_CREDENTIALS,
+# not from an env var. The shim fetches GCP_SA_KEY_JSON from the
+# coding-agent-vps-tooling Infisical project, writes it to /dev/shm (tmpfs,
+# memory-only, never touches a real disk), points GOOGLE_APPLICATION_CREDENTIALS
+# at it, runs gcloud, and removes the temp file on exit/signal.
+#
+# Real binary: /usr/bin/gcloud
+# Trap covers EXIT/HUP/INT/TERM so Ctrl+C mid-command doesn't leave the
+# JSON behind in /dev/shm.
+
+set -euo pipefail
+
+: "${INFISICAL_TOOLING_PROJECT_ID:?INFISICAL_TOOLING_PROJECT_ID not set — host bootstrap.sh has not populated /run/agent-env/sandbox-config.sh, or this shell did not source /etc/profile.d/agent-env.sh}"
+: "${INFISICAL_ENV:=dev}"
+
+cred_file=$(mktemp /dev/shm/gcloud-sa.XXXXXXXX)
+chmod 0600 "$cred_file"
+trap 'rm -f "$cred_file"' EXIT HUP INT TERM
+
+# Fetch GCP_SA_KEY_JSON from Infisical and write to the tmpfs file.
+# `infisical secrets get --plain <name>` prints just the value, no formatting.
+infisical secrets get \
+    --projectId="$INFISICAL_TOOLING_PROJECT_ID" \
+    --env="$INFISICAL_ENV" \
+    --plain \
+    GCP_SA_KEY_JSON \
+    > "$cred_file"
+
+GOOGLE_APPLICATION_CREDENTIALS="$cred_file" /usr/bin/gcloud "$@"
