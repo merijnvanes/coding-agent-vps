@@ -31,6 +31,12 @@ ARG HCLOUD_VERSION=1.64.1
 # SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
 # https://github.com/hetznercloud/cli/releases/download/v$HCLOUD_VERSION/checksums.txt
 ARG HCLOUD_SHA256=f6f60a929776ac300dffd42d8a8df6ac0d43d0d05e17bf6ecf6aa5b53fa364c2
+ARG SUPABASE_CLI_VERSION=2.98.2
+# SHA256 of supabase_linux_amd64.tar.gz at SUPABASE_CLI_VERSION. Source:
+# https://github.com/supabase/cli/releases/download/v$SUPABASE_CLI_VERSION/supabase_${SUPABASE_CLI_VERSION}_checksums.txt
+# (note: the checksums file name embeds the version — NOT a generic
+# checksums.txt — different from hcloud's pattern above.)
+ARG SUPABASE_CLI_SHA256=0f59df9e6837e876f309e0b4f47005133c51296e85a02727b2927f33ed9adb2d
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -174,6 +180,19 @@ RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_
     && echo "${HCLOUD_SHA256}  /tmp/hcloud.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/hcloud.tar.gz -C /usr/local/bin hcloud \
     && rm /tmp/hcloud.tar.gz
+
+# --- Supabase CLI ---
+# SHA256-verified, parallel to uv/hcloud. Used by per-app projects under /work
+# that talk to Supabase. The agent should NEVER run `supabase login` inside
+# the sandbox (that writes the access token to ~/.supabase/access-token on
+# disk). Instead, store SUPABASE_ACCESS_TOKEN in the per-app Infisical project
+# and invoke via `infisical run -- supabase <cmd>` so the token lives only in
+# process memory for the command's duration. See docs/USAGE.md.
+RUN curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_linux_amd64.tar.gz" \
+        -o /tmp/supabase.tar.gz \
+    && echo "${SUPABASE_CLI_SHA256}  /tmp/supabase.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/supabase.tar.gz -C /usr/local/bin supabase \
+    && rm /tmp/supabase.tar.gz
 
 # --- Infisical CLI (single Go binary) ---
 # For use by app projects under /work that have their own Infisical workspace

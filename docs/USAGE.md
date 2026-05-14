@@ -31,6 +31,21 @@ infisical login                              # opens device-code flow
 infisical run --env=dev -- npm start         # or pnpm / uv run / etc.
 ```
 
+The same pattern applies to per-project CLIs that read auth from an env
+var. Supabase CLI is the canonical example — store the access token as
+`SUPABASE_ACCESS_TOKEN` in the project's Infisical workspace and invoke:
+
+```bash
+infisical run --env=dev -- supabase db push
+infisical run --env=dev -- supabase functions deploy <name>
+```
+
+**Don't `supabase login` inside the sandbox.** That writes the token
+to `~/.supabase/access-token` on disk, which persists across the
+container lifetime and is readable by anything running as the agent
+user. The env-var path keeps the token in process memory only — gone
+when the command exits.
+
 `infisical login` state is **not** persisted across container rebuilds
 (unlike Claude/Codex OAuth, which use named volumes). After
 `docker compose up -d --build` or a full VPS rebuild, log in again.

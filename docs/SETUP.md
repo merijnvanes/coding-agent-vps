@@ -194,13 +194,13 @@ releases avoids the patient-zero window.
 
 | File | Pins |
 |---|---|
-| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256` |
+| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256`, `SUPABASE_CLI_VERSION` + `SUPABASE_CLI_SHA256` |
 | `cloud-init.yaml` (Tailscale install in `runcmd`) | inline `tailscale=X.Y.Z` |
 | `scripts/cloud-init-tasks.sh` (Docker install block) | `DOCKER_CE_VERSION`, `CONTAINERD_VERSION`, `DOCKER_BUILDX_VERSION`, `DOCKER_COMPOSE_VERSION` |
 
-`UV_SHA256` and `HCLOUD_SHA256` MUST be refreshed in lockstep with the
-matching `_VERSION` ARG — they verify the downloaded tarball at build
-time, so a mismatch fails the build.
+`UV_SHA256`, `HCLOUD_SHA256`, and `SUPABASE_CLI_SHA256` MUST be refreshed in
+lockstep with the matching `_VERSION` ARG — they verify the downloaded
+tarball at build time, so a mismatch fails the build.
 
 ### Lookup procedure
 
@@ -227,7 +227,7 @@ curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
   | sort_by(.value) | last | .key'
 ```
 
-**GitHub releases** (`uv`, `hcloud`):
+**GitHub releases** (`uv`, `hcloud`, `supabase`):
 
 ```bash
 curl -s "https://api.github.com/repos/<owner>/<repo>/releases" \
@@ -238,10 +238,11 @@ curl -s "https://api.github.com/repos/<owner>/<repo>/releases" \
       | .[0].tag_name'
 ```
 
-⚠️ For **hcloud**, GitHub tags are prefixed with `v` (e.g. `v1.64.1`)
-but the Dockerfile's `HCLOUD_VERSION` ARG is the version *without*
-the prefix (the URL adds it back: `releases/download/v${HCLOUD_VERSION}/...`).
-Strip the `v` before pasting: pipe the snippet above through
+⚠️ For **hcloud** and **supabase**, GitHub tags are prefixed with `v`
+(e.g. `v1.64.1`, `v2.98.2`) but the Dockerfile's `HCLOUD_VERSION` /
+`SUPABASE_CLI_VERSION` ARGs are the version *without* the prefix (the
+URL adds it back: `releases/download/v${HCLOUD_VERSION}/...`). Strip
+the `v` before pasting: pipe the snippet above through
 `sed 's/^v//'`.
 
 For `uv` also fetch the matching SHA256 (update `UV_SHA256` alongside
@@ -258,6 +259,16 @@ covering every release asset; grep the linux-amd64 line:
 ```bash
 curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_VERSION}/checksums.txt" \
   | awk '$2 == "hcloud-linux-amd64.tar.gz" {print $1}'
+```
+
+For `supabase` also fetch the matching SHA256 (update
+`SUPABASE_CLI_SHA256` alongside `SUPABASE_CLI_VERSION`). ⚠️ Supabase's
+checksums file is named with the version embedded
+(`supabase_<VERSION>_checksums.txt`), NOT a generic `checksums.txt`:
+
+```bash
+curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_checksums.txt" \
+  | awk '$2 == "supabase_linux_amd64.tar.gz" {print $1}'
 ```
 
 **APT-installed** (`nodejs`, `tailscale`, `google-cloud-cli`,
