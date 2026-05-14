@@ -53,12 +53,15 @@ ENV PNPM_HOME=/usr/local/pnpm
 ENV PATH="${PNPM_HOME}/bin:${PATH}"
 RUN mkdir -p "${PNPM_HOME}/bin"
 
-# /etc/npmrc — read by both pnpm and npm. Sets minimum-release-age (docs/REQUIREMENTS.md §5):
-#   pnpm 11+ reads `minimum-release-age` in minutes  (10080 = 7d)
-#   npm 11+  reads `min-release-age`     in days     (7      = 7d)
-# Setting both means any package manager run inside the sandbox enforces the policy.
+# /etc/npmrc — read by the npm CLI only.
+# pnpm 10+ ONLY reads auth/registry settings from .npmrc files; everything
+# else (minimumReleaseAge, blockExoticSubdeps, etc.) must live in pnpm's own
+# YAML config. pnpm-specific supply-chain settings are therefore set below
+# in /home/agent/.config/pnpm/config.yaml.
+# This file gives `npm install` (if anyone runs it directly) the same 7-day
+# release-age guard pnpm gets via its YAML config — npm still reads .npmrc
+# for everything.
 RUN cat >/etc/npmrc <<'EOF'
-minimum-release-age=10080
 min-release-age=7
 EOF
 
@@ -71,6 +74,17 @@ RUN curl -fsSL https://sdk.cloud.google.com -o /tmp/install-gcloud.sh \
     && ln -sf /opt/google-cloud-sdk/bin/gcloud /usr/local/bin/gcloud \
     && ln -sf /opt/google-cloud-sdk/bin/gsutil /usr/local/bin/gsutil \
     && rm /tmp/install-gcloud.sh
+
+# --- pnpm config for build-time installs (root) ---
+# The `pnpm add -g` calls below run as root, BEFORE the agent user is created
+# and BEFORE its pnpm config is written. Without this, root's installs of
+# wrangler / claude-code / codex would skip the supply-chain hardening that
+# the agent-user config applies to everything inside /work. Same keys, same
+# values as ~agent/.config/pnpm/config.yaml — see USER agent block for the
+# detailed reasoning behind each setting.
+RUN mkdir -p /root/.config/pnpm \
+    && printf 'minimumReleaseAge: 10080\nblockExoticSubdeps: true\n' \
+        > /root/.config/pnpm/config.yaml
 
 # --- wrangler (Cloudflare) — global install via pnpm ---
 # pnpm 10+ blocks postinstall scripts by default (supply-chain hardening).
@@ -106,6 +120,21 @@ RUN pnpm add -g \
 # into an empty named volume). Without this, first `claude login` etc. would
 # write to a root-owned volume and fail.
 #
+# Also drops two supply-chain hardening configs under ~agent/.config (neither
+# tool reads from a system-wide /etc/ path; the sandbox is single-user, so
+# per-user IS as global as it gets):
+#   - pnpm:  minimumReleaseAge=10080  (7 days, in minutes) — refuses package
+#            versions published in the last week so the community has time to
+#            spot and yank a malicious release before we pull it.
+#            blockExoticSubdeps=true — transitive deps must resolve from the
+#            registry; git URLs / tarball URLs as TRANSITIVE deps are refused
+#            (your own package.json can still declare exotic direct deps).
+#            MUST be YAML camelCase here — pnpm 10+ ignores these from .npmrc.
+#   - uv:    exclude-newer="7 days" — rolling window relative to install time,
+#            mirrors the pnpm minimumReleaseAge guard. uv has no equivalent of
+#            blockExoticSubdeps; Python-side transitive deps from git/URL
+#            sources are NOT blocked. Known gap, revisit if astral ships it.
+#
 # Ubuntu 24.04 base ships a default `ubuntu` user at UID 1000 (new in noble);
 # remove it first so our `agent` user can claim 1000.
 RUN userdel -r ubuntu 2>/dev/null || true \
@@ -113,8 +142,12 @@ RUN userdel -r ubuntu 2>/dev/null || true \
     && mkdir -p /work \
                 /home/agent/.claude \
                 /home/agent/.codex \
-                /home/agent/.config \
+                /home/agent/.config/pnpm \
+                /home/agent/.config/uv \
                 /home/agent/.local/state/agent-state \
+    && printf 'minimumReleaseAge: 10080\nblockExoticSubdeps: true\n' \
+        > /home/agent/.config/pnpm/config.yaml \
+    && printf 'exclude-newer = "7 days"\n' > /home/agent/.config/uv/uv.toml \
     && chown -R agent:agent /work /home/agent
 
 # --- entrypoint + env-export sourcing for ALL shell flavors ---
