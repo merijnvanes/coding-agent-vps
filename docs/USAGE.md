@@ -244,10 +244,10 @@ ssh <user>@coding-agent-vps
 cd /opt/agent-vps && docker compose up -d --build
 ```
 
-Named volumes (`sandbox-state-claude`, `sandbox-state-codex`) persist —
-no Claude/Codex OAuth re-login needed. Your tmux session is killed on
-container recreation (it's a process inside the container); reattach
-afterward.
+Named volumes (`sandbox-state-claude`, `sandbox-state-codex`,
+`sandbox-state-gemini`) persist — no Claude/Codex/Gemini OAuth re-login
+needed. Your tmux session is killed on container recreation (it's a
+process inside the container); reattach afterward.
 
 The `infisical login` session does NOT persist across rebuilds (no
 named volume — intentional, the sandbox holds no long-lived secret

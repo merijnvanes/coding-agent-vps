@@ -26,6 +26,7 @@ ARG GCLOUD_VERSION=458.0.0-0
 ARG WRANGLER_VERSION=4.88.0
 ARG CLAUDE_CODE_VERSION=2.1.132
 ARG CODEX_VERSION=0.128.0
+ARG GEMINI_CLI_VERSION=0.41.2
 ARG INFISICAL_VERSION=0.39.0
 ARG HCLOUD_VERSION=1.64.1
 # SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
@@ -237,8 +238,10 @@ RUN curl -1sLf https://artifacts-cli.infisical.com/infisical.gpg \
 RUN pnpm add -g \
       --allow-build=@anthropic-ai/claude-code \
       --allow-build=@openai/codex \
+      --allow-build=@google/gemini-cli \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-      "@openai/codex@${CODEX_VERSION}"
+      "@openai/codex@${CODEX_VERSION}" \
+      "@google/gemini-cli@${GEMINI_CLI_VERSION}"
 
 # `claude-yolo` — short alias for `claude --dangerously-skip-permissions`.
 # Mirrors the laptop convenience; running YOLO mode is the intended posture
@@ -278,6 +281,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
     && mkdir -p /work \
                 /home/agent/.claude \
                 /home/agent/.codex \
+                /home/agent/.gemini \
                 /home/agent/.config/pnpm \
                 /home/agent/.config/uv \
                 /home/agent/.local/state/agent-state \

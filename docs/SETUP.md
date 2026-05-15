@@ -194,7 +194,7 @@ releases avoids the patient-zero window.
 
 | File | Pins |
 |---|---|
-| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256`, `SUPABASE_CLI_VERSION` + `SUPABASE_CLI_SHA256` |
+| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `GEMINI_CLI_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256`, `SUPABASE_CLI_VERSION` + `SUPABASE_CLI_SHA256` |
 | `cloud-init.yaml` (Tailscale install in `runcmd`) | inline `tailscale=X.Y.Z` |
 | `scripts/cloud-init-tasks.sh` (Docker install block) | `DOCKER_CE_VERSION`, `CONTAINERD_VERSION`, `DOCKER_BUILDX_VERSION`, `DOCKER_COMPOSE_VERSION` |
 
@@ -217,7 +217,7 @@ T=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 ```
 
 **npm packages** (`npm`, `pnpm`, `wrangler`, `@anthropic-ai/claude-code`,
-`@openai/codex`):
+`@openai/codex`, `@google/gemini-cli`):
 
 ```bash
 curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
@@ -730,13 +730,15 @@ The user lands inside the sandbox's tmux session.
 ```bash
 claude login        # prints a URL; user opens it on their laptop, completes OAuth, pastes the code back
 codex login         # same flow
+gemini             # first run prompts for OAuth via Google sign-in (browser on the laptop)
 infisical login     # device-code flow — gives the sandbox access to coding-agent-vps-tooling + per-app projects
 ```
 
-All three OAuth flows are interactive and require browser access on the
-user's laptop. The first two land tokens in `~/.claude/` and `~/.codex/`,
-which are mounted on named Docker volumes (`sandbox-state-claude`,
-`sandbox-state-codex`) — survive container rebuild.
+All four OAuth flows are interactive and require browser access on the
+user's laptop. The first three land tokens in `~/.claude/`, `~/.codex/`,
+and `~/.gemini/`, which are mounted on named Docker volumes
+(`sandbox-state-claude`, `sandbox-state-codex`, `sandbox-state-gemini`)
+— survive container rebuild.
 
 The `infisical login` token lands in `~/.infisical/` inside the
 container, which is **NOT** on a named volume — it's gone on
