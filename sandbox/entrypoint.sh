@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # sandbox/entrypoint.sh — container entrypoint
 #
-# Env-export files (CLOUDFLARE_API_TOKEN, HCLOUD_TOKEN, PyPI tokens)
-# are sourced via /etc/profile.d/agent-env.sh (installed by the Dockerfile),
-# which is read by every interactive bash login shell — including new tmux
-# windows. That way a rotation that updates the file on disk reaches the
-# next new shell without restarting the container.
+# Non-secret sandbox config (INFISICAL_TOOLING_PROJECT_ID + INFISICAL_ENV
+# in sandbox-config.sh) is sourced via /etc/profile.d/agent-env.sh, which
+# is read by every interactive bash login shell (including new tmux
+# windows). The PATH shims at /opt/agent-vps-wrappers/ then use those env
+# vars to invoke `infisical run --` per command. Cloud-CLI tokens
+# themselves never enter any persistent shell env — they live in the
+# subprocess env of one command at a time.
 #
 # This entrypoint just sets SSH_AUTH_SOCK and hands off to the user's
 # command. Default command: tmux new-session (attached) so the user lands

@@ -50,7 +50,6 @@ install -d -m 0755 -o root   -g root   /var/lib/agent-vps
 install -d -m 0700 -o creds  -g creds  /var/lib/agent-vps/creds
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/env
-install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/gcloud
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/sockets
 
 # Project workspace. Mode 0777 so the rootless-Docker-mapped sandbox UID
