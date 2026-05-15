@@ -240,6 +240,16 @@ RUN pnpm add -g \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}"
 
+# `claude-yolo` — short alias for `claude --dangerously-skip-permissions`.
+# Mirrors the laptop convenience; running YOLO mode is the intended posture
+# for this sandbox per docs/REQUIREMENTS.md §1 (the whole VPS architecture
+# exists to make it safe). A PATH script rather than a shell alias so it
+# also works in non-interactive `bash -c` and `docker exec` invocations.
+RUN cat >/usr/local/bin/claude-yolo <<'EOF' && chmod 0755 /usr/local/bin/claude-yolo
+#!/usr/bin/env bash
+exec claude --dangerously-skip-permissions "$@"
+EOF
+
 # --- non-root agent user ---
 # Pre-create the volume mount paths so named volumes inherit agent:agent
 # ownership on first attach (Docker copies the existing dir's mode/ownership
