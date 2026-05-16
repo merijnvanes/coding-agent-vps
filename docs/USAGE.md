@@ -359,7 +359,7 @@ fresh rebuild from the latest source picks up the working install:
 
 ```bash
 ssh <user>@coding-agent-vps
-cd /opt/agent-vps && git pull && docker compose up -d --build
+sudo git -C /opt/agent-vps pull && cd /opt/agent-vps && docker compose up -d --build
 ```
 
 If the error persists after rebuild, check that the Dockerfile in the
