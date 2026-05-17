@@ -24,13 +24,18 @@ is on by default).
 The sandbox container is capped at 3 GB of RAM (`mem_limit` in
 `docker-compose.yml`). A single Claude / Codex session typically
 sits at 300–700 MB resident, so 2–3 concurrent agents is comfortable
-on the default CX23. If the cap is exceeded, the in-container cgroup
-OOM killer reaps a process (usually the heaviest in-container leaf —
-you'll see `Killed` in that tmux pane). The host stays responsive
-either way; in a worst case the OOM target is the container init,
-which trips `restart: unless-stopped` and brings the sandbox back
-with all tmux sessions inside it lost. SSH and host services keep
-working throughout. See
+on the default CX23. If the cap is exceeded, the offending process
+hits `ENOMEM` at the cgroup boundary — most language runtimes
+(Python, Node.js, etc.) surface this as a visible out-of-memory
+error (`MemoryError`, `JavaScript heap out of memory`, …) and exit
+with a traceback in the tmux pane. Processes that don't handle
+`ENOMEM` gracefully trigger the cgroup OOM killer as a backstop,
+which reaps the heaviest in-container leaf (you'll see `Killed`);
+worst case it targets the container init, which trips
+`restart: unless-stopped` and brings the sandbox back fresh with
+all tmux sessions inside it lost. **Either path keeps the host
+fully responsive** — SSH, other tmux sessions in the same
+container, and host services keep working throughout. See
 [Troubleshooting: VPS unresponsive](#vps-unresponsive-cpu-pegged-ssh-hangs)
 for the failure mode this prevents.
 
@@ -306,14 +311,17 @@ Cloud Console shows CPU at ~200% (both vCPUs maxed) for an extended
 period. If you can still get a shell, `uptime` shows a load average
 in double digits and `top` shows everything blocked on iowait.
 
-**What's almost certainly happening**: page-cache thrashing inside
-the sandbox. An agent (or several) approached the container's 3 GB
-`mem_limit` *and* the kernel's reclaim is evicting mmap'd executable
-pages that are immediately refaulted. This shouldn't happen in
-normal operation — the cgroup OOM killer should reap the heaviest
-process well before the host degrades — but it can if a single
-process grows too fast for the cgroup memory controller to react,
-or if host-side processes (not the container) are the offender.
+**What's almost certainly happening**: page-cache thrashing. The
+host (or, less commonly, the container) ran out of reclaimable
+memory and the kernel is evicting mmap'd executable pages that get
+immediately refaulted, pinning CPU on iowait. This shouldn't happen
+in normal operation — the cgroup boundary surfaces `ENOMEM` to
+in-container processes (which then either self-terminate with a
+language-level out-of-memory error or get OOM-killed as a backstop)
+*before* the host has to reclaim anything. But it can if a
+host-side process (not in the sandbox cgroup) is the offender, or
+if a buggy in-container process consumes memory in a way that
+bypasses both `ENOMEM` handling and OOM kill.
 
 **Diagnose from your laptop** (no SSH needed):
 
@@ -359,11 +367,14 @@ If CPU is at ~200% for >5 min and not dropping, the host is stuck.
 **Why this is rare on current `main`**: the sandbox container is
 capped at 3 GB (`mem_limit`) and the host has a 2 GB swapfile with
 `vm.swappiness=10` (configured by `scripts/cloud-init-tasks.sh`).
-Together these ensure that an over-allocating in-container process
-hits the cgroup OOM killer first — one process dies, host stays up.
-If you find yourself hitting the host-level failure mode anyway,
-the offender is probably *outside* the sandbox: check `dockerd`,
-`cred-daemon`, or your own SSH sessions.
+Together these ensure an over-allocating in-container process
+fails at the cgroup boundary (`ENOMEM` → language-level OOM error
+→ process exit, with cgroup OOM kill as backstop) before the host
+ever sees pressure; and even if the host *does* see pressure,
+swap gives the kernel somewhere to push cold pages instead of
+evicting file cache. If you find yourself hitting the host-level
+failure mode anyway, the offender is probably *outside* the
+sandbox: check `dockerd`, `cred-daemon`, or your own SSH sessions.
 
 ### VPS never appears in `tailscale status` after ~5 min
 
