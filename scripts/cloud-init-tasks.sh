@@ -221,6 +221,30 @@ if ! grep -qw memory <<<"$DELEGATED"; then
   exit 1
 fi
 
+# Install the sandbox slice into dev's user systemd. The slice enforces
+# memory.swap.max=0 on the container, denying any swap allowance.
+# Required because Docker's `memswap_limit` is silently ignored on
+# rootless Docker + cgroup v2 — see daemon/sandbox.slice for the empirical
+# story. Must be loaded before the first `docker compose up -d`, since
+# compose's `cgroup_parent: sandbox.slice` references a slice that must
+# already exist in systemd.
+log "installing sandbox.slice into dev's user systemd"
+DEV_HOME=$(getent passwd dev | cut -d: -f6)
+install -d -m 0755 -o dev -g dev "$DEV_HOME/.config/systemd/user"
+install -m 0644 -o dev -g dev /opt/agent-vps/daemon/sandbox.slice \
+  "$DEV_HOME/.config/systemd/user/sandbox.slice"
+# daemon-reload picks up the file change. `set-property` forces the
+# kernel cgroup file to be re-written from the unit spec on re-runs —
+# `daemon-reload` alone does NOT propagate slice property changes to a
+# live slice (and we can't `restart` it without killing the sandbox
+# container that's a member). Cheap, idempotent, and means a future
+# edit to the slice file actually takes effect on the next script run.
+sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID bash -lc '
+  systemctl --user daemon-reload
+  systemctl --user is-active --quiet sandbox.slice || systemctl --user start sandbox.slice
+  systemctl --user set-property sandbox.slice MemorySwapMax=0
+'
+
 # === 6. Build the sandbox image ===
 log "building sandbox image (~5–10 min on a CX23)"
 sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \

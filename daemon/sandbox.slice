@@ -1,0 +1,32 @@
+# daemon/sandbox.slice — systemd user slice for the sandbox container.
+#
+# Why this exists: docker-compose.yml's `memswap_limit` field is silently
+# ignored on rootless Docker + cgroup v2 (verified empirically — a 4 GB
+# python bytearray inside the container ran to ~5 GB total before getting
+# OOM-killed, with peak swap usage 1.95 GB). Docker sets HostConfig.MemorySwap
+# in the container spec, but never translates it to the cgroup v2
+# `memory.swap.max` interface — the cgroup file stays at "max" (unlimited).
+#
+# Without enforcement, the container can eat the entire 2 GB host swap pool
+# in addition to its 3 GB RAM cap, leaving the host with no swap of its own.
+# That defeats the design intent of "swap is the host's emergency reclaim,
+# not container expansion space" — see scripts/cloud-init-tasks.sh step 1
+# for the broader rationale.
+#
+# Fix: docker-compose.yml uses `cgroup_parent: sandbox.slice` to place the
+# container under this slice. systemd applies MemorySwapMax=0 at the slice
+# level on creation; the container's own cgroup inherits memory.swap.max=0
+# from its parent. The cgroup OOM killer now fires at exactly mem_limit
+# (3 GB RAM, 0 swap) — verified with the same test allocating to 3000 MB
+# and killed there cleanly.
+#
+# This is a USER slice (dev's user@1000.service hierarchy) because rootless
+# Docker runs inside the dev user-systemd. Installed by scripts/cloud-init-
+# tasks.sh into ~dev/.config/systemd/user/ at provisioning time.
+
+[Unit]
+Description=Sandbox slice — denies swap allowance for the agent container
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+
+[Slice]
+MemorySwapMax=0

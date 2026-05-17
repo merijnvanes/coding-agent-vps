@@ -269,13 +269,21 @@ Named volumes (`sandbox-state-claude`, `sandbox-state-codex`,
 needed. Your tmux session is killed on container recreation (it's a
 process inside the container); reattach afterward.
 
-After any `docker-compose.yml` change that touches resource limits,
-verify the new limits actually applied (a pulled diff doesn't
-reconfigure a running container — `up -d` must recreate it):
+After any `docker-compose.yml` or `daemon/sandbox.slice` change that
+touches resource limits, verify the new limits actually applied
+(a pulled diff doesn't reconfigure a running container — `up -d`
+must recreate it, and slice changes apply only on the next
+container recreation or `set-property`):
 
 ```bash
-docker inspect sandbox --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}'
-# expect: 3221225472 3221225472   (3 GiB each)
+# Docker-side: RAM cap and slice placement
+docker inspect sandbox --format '{{.HostConfig.Memory}} {{.HostConfig.CgroupParent}}'
+# expect: 3221225472 sandbox.slice
+
+# Slice-side: the actual swap-denial enforcement (effective cap on
+# all descendants of the slice, including the container's cgroup)
+cat /sys/fs/cgroup/user.slice/user-$(id -u dev).slice/user@$(id -u dev).service/sandbox.slice/memory.swap.max
+# expect: 0
 ```
 
 The `infisical login` session does NOT persist across rebuilds (no
@@ -365,16 +373,18 @@ If CPU is at ~200% for >5 min and not dropping, the host is stuck.
    boot's journal survives the reset.
 
 **Why this is rare on current `main`**: the sandbox container is
-capped at 3 GB (`mem_limit`) and the host has a 2 GB swapfile with
-`vm.swappiness=10` (configured by `scripts/cloud-init-tasks.sh`).
-Together these ensure an over-allocating in-container process
-fails at the cgroup boundary (`ENOMEM` → language-level OOM error
-→ process exit, with cgroup OOM kill as backstop) before the host
-ever sees pressure; and even if the host *does* see pressure,
-swap gives the kernel somewhere to push cold pages instead of
-evicting file cache. If you find yourself hitting the host-level
-failure mode anyway, the offender is probably *outside* the
-sandbox: check `dockerd`, `cred-daemon`, or your own SSH sessions.
+hard-capped at 3 GB total (`mem_limit: 3g` for RAM + `cgroup_parent:
+sandbox.slice` enforcing `memory.swap.max=0` so no swap allowance),
+and the host has a 2 GB swapfile with `vm.swappiness=10` (all configured
+by `scripts/cloud-init-tasks.sh`). Together these ensure an
+over-allocating in-container process fails at the cgroup boundary
+(`ENOMEM` → language-level OOM error → process exit, with cgroup
+OOM kill as backstop) before the host ever sees pressure; and even
+if the host *does* see pressure, swap (untouched by the container)
+gives the kernel somewhere to push cold pages instead of evicting
+file cache. If you find yourself hitting the host-level failure
+mode anyway, the offender is probably *outside* the sandbox: check
+`dockerd`, `cred-daemon`, or your own SSH sessions.
 
 ### VPS never appears in `tailscale status` after ~5 min
 

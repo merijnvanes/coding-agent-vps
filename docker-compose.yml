@@ -22,18 +22,25 @@ services:
     stdin_open: true
     tty: true
 
-    # Memory cap — paired with the host swapfile + vm.swappiness=10 set
-    # in scripts/cloud-init-tasks.sh. Container bounded to 3 GB of the
-    # host's 3.7 GB RAM, leaving ~700 MB for sshd/dockerd/tailscaled.
-    # When the container exceeds 3 GB, the cgroup OOM killer reaps the
-    # heaviest in-container process; host stays responsive. Without
-    # this, concurrent agent CLIs (Claude / Codex / Gemini) can consume
-    # all host RAM and trigger page-cache thrashing that freezes the
-    # VPS — see docs/USAGE.md "VPS unresponsive: CPU pegged, SSH hangs".
-    # memswap_limit equal to mem_limit denies the container any swap
-    # allowance; swap stays reserved as the host's emergency reclaim.
+    # Memory cap — full story in scripts/cloud-init-tasks.sh step 1
+    # and daemon/sandbox.slice.
+    #
+    # mem_limit bounds container RAM at 3 GB of the host's 3.7 GB,
+    # leaving ~700 MB for sshd/dockerd/tailscaled. On breach, in-container
+    # allocations get ENOMEM at the cgroup boundary — most language
+    # runtimes (Python, Node.js) surface this as a language-level OOM
+    # error and exit; the cgroup OOM killer reaps anything that doesn't
+    # self-terminate as a backstop. Host stays responsive throughout.
+    #
+    # cgroup_parent places the container under daemon/sandbox.slice,
+    # which enforces memory.swap.max=0 — denying the container any
+    # swap allowance so the host's 2 GB swap stays reserved as the
+    # host's own emergency reclaim. We need the slice because Docker's
+    # `memswap_limit: 3g` is silently ignored on rootless Docker +
+    # cgroup v2 (the field is set on HostConfig but never applied to
+    # the cgroup). See daemon/sandbox.slice for the empirical story.
     mem_limit: 3g
-    memswap_limit: 3g
+    cgroup_parent: sandbox.slice
 
     # Host-loopback dev-server ports — reachable ONLY via SSH port forwarding
     # from the laptop:
