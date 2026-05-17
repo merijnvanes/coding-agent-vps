@@ -308,9 +308,22 @@ ENV BASH_ENV=/etc/profile.d/agent-env.sh
 #    is re-sourced, picking up rotated env values without container restart
 #  - mouse on: scroll wheel scrolls the scrollback buffer directly
 #    (hold Option/Shift to make selections bypass tmux for terminal-native copy)
+#  - remain-on-exit failed: when a pane's *direct command* (i.e. the bash
+#    login shell set by default-command above) dies abnormally — SIGKILL
+#    from cgroup OOM, segfault, non-zero exit — keep the pane around
+#    showing "[exited]" instead of closing it. Note: a Claude/Codex
+#    process killed inside an interactive bash does NOT trigger this;
+#    bash absorbs the SIGCHLD and stays alive, so the pane stays via
+#    normal bash behavior. The cascade this PREVENTS is the heavier one:
+#    OOM kills the *bash shell itself* (or its env is corrupted) → pane
+#    closes → if last window in session, session ends → if last session,
+#    tmux server exits → all your other sessions die with it. With this
+#    setting, the dead pane is preserved, session and server live on.
+#    Normal pane closes (user typing `exit`, exit code 0) still close.
 RUN printf '%s\n' \
       'set-option -g default-command "/bin/bash -l"' \
       'set -g mouse on' \
+      'set -g remain-on-exit failed' \
       >> /etc/tmux.conf
 
 # Known limitation, documented for the user: `docker exec sandbox <binary>`

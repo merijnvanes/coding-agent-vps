@@ -22,6 +22,21 @@ services:
     stdin_open: true
     tty: true
 
+    # Use Docker's bundled `tini`-equivalent as PID 1. Two reasons:
+    # (1) tmux is no longer PID 1 (see sandbox/entrypoint.sh), so we need a
+    # proper init to reap zombies and forward signals like `docker stop`.
+    # (2) Container's survival no longer depends on tmux — if tmux dies for
+    # any reason (OOM kill of the bash shell in a pane, manual kill-server,
+    # etc.), the container stays up. User reconnects, runs
+    # `docker exec -it sandbox tmux new-session -A -s main` to recreate,
+    # and the container's writable layer (e.g. `~/.infisical/login`
+    # session) is preserved. Before this change, today's OOM cascade
+    # killed the container — see commit history + docs/USAGE.md
+    # "VPS unresponsive". Caveat: SIGTERM on `docker stop` is forwarded
+    # only to the entrypoint's `sleep infinity`, so the tmux server gets
+    # SIGKILLed at teardown — acceptable since no tmux state is persisted.
+    init: true
+
     # Memory cap — full story in scripts/cloud-init-tasks.sh step 1
     # and daemon/sandbox.slice.
     #

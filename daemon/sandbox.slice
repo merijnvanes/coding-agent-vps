@@ -29,4 +29,13 @@ Description=Sandbox slice — denies swap allowance for the agent container
 Documentation=https://github.com/merijnvanes/coding-agent-vps
 
 [Slice]
+# MemoryHigh is a soft throttle: when container memory usage exceeds 2700M
+# (~90% of mem_limit), the kernel forces synchronous reclaim on processes
+# allocating inside the slice — they feel "slow" rather than getting killed.
+# This buys a warning window before the 3 GB hard cap (mem_limit in
+# docker-compose.yml) triggers the cgroup OOM killer. Without this, normal
+# heavy use can hit the hard cap with no early signal — exactly the path
+# that nuked a working tmux session today. 2700M chosen to give the kernel
+# enough reclaim headroom (~300 MB) without throttling legitimate workloads.
+MemoryHigh=2700M
 MemorySwapMax=0

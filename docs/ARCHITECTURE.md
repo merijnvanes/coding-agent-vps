@@ -191,7 +191,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 4. **Paste — Infisical Universal Auth client secret** into `/etc/agent-vps/infisical-uauth` (0600 creds:creds).
 5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`.
 6. **Sandbox container starts**. The named volumes `sandbox-state-claude` and `sandbox-state-codex` are created (if first-ever bootstrap) or attached (if reusing previous state — the case after a container rebuild that doesn't destroy the VPS).
-7. **`docker exec -it sandbox tmux attach -t main`** — attach to the sandbox's tmux session (the container's entrypoint runs `tmux new -A -s main`).
+7. **`docker exec -it sandbox tmux attach -t main`** — attach to the sandbox's tmux session (the container's entrypoint pre-creates `main` via `tmux new-session -d -s main` and then `exec sleep infinity` to keep PID 1 alive independently of tmux's lifecycle — see `sandbox/entrypoint.sh` for why).
 8. **`claude login`** + **`codex login`** — only required on first-ever bootstrap or if the named volumes were wiped (i.e., full VPS rebuild). On container rebuilds, refresh tokens persist in the named volumes and the agents are already authenticated.
 9. **tmux detach**, agent is ready.
 
@@ -223,7 +223,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
   scripts/                                      # provision.sh (laptop), cloud-init-tasks.sh, bootstrap.sh
   sandbox/
     Dockerfile                                  # built on the VPS via `docker build` at cloud-init time
-    entrypoint.sh                               # container entrypoint: sets SSH_AUTH_SOCK + exec tmux
+    entrypoint.sh                               # container entrypoint: sets SSH_AUTH_SOCK, pre-creates tmux 'main' session detached, execs sleep infinity (PID 1 stays alive independently of tmux)
     profile.d-agent-env.sh                      # sourced by interactive shells inside the container
     wrappers/                                   # PATH shims (hcloud, wrangler, gcloud, supabase) baked into image
 ```
