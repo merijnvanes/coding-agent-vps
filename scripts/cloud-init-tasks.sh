@@ -242,7 +242,7 @@ install -m 0644 -o dev -g dev /opt/agent-vps/daemon/sandbox.slice \
 sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID bash -lc '
   systemctl --user daemon-reload
   systemctl --user is-active --quiet sandbox.slice || systemctl --user start sandbox.slice
-  systemctl --user set-property sandbox.slice MemorySwapMax=0
+  systemctl --user set-property sandbox.slice MemorySwapMax=0 MemoryHigh=2700M
 '
 
 # === 6. Build the sandbox image ===
