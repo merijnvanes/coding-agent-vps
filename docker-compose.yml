@@ -22,6 +22,19 @@ services:
     stdin_open: true
     tty: true
 
+    # Memory cap — paired with the host swapfile + vm.swappiness=10 set
+    # in scripts/cloud-init-tasks.sh. Container bounded to 3 GB of the
+    # host's 3.7 GB RAM, leaving ~700 MB for sshd/dockerd/tailscaled.
+    # When the container exceeds 3 GB, the cgroup OOM killer reaps the
+    # heaviest in-container process; host stays responsive. Without
+    # this, concurrent agent CLIs (Claude / Codex / Gemini) can consume
+    # all host RAM and trigger page-cache thrashing that freezes the
+    # VPS — see docs/USAGE.md "VPS unresponsive: CPU pegged, SSH hangs".
+    # memswap_limit equal to mem_limit denies the container any swap
+    # allowance; swap stays reserved as the host's emergency reclaim.
+    mem_limit: 3g
+    memswap_limit: 3g
+
     # Host-loopback dev-server ports — reachable ONLY via SSH port forwarding
     # from the laptop:
     #     ssh -L 3000:127.0.0.1:3000 dev@coding-agent-vps

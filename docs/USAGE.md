@@ -19,6 +19,21 @@ persists across SSH disconnects.
 Detach tmux with `Ctrl-b d`. Mouse-wheel scrollback works (mouse mode
 is on by default).
 
+### Running multiple agents in parallel
+
+The sandbox container is capped at 3 GB of RAM (`mem_limit` in
+`docker-compose.yml`). A single Claude / Codex session typically
+sits at 300–700 MB resident, so 2–3 concurrent agents is comfortable
+on the default CX23. If the cap is exceeded, the in-container cgroup
+OOM killer reaps a process (usually the heaviest in-container leaf —
+you'll see `Killed` in that tmux pane). The host stays responsive
+either way; in a worst case the OOM target is the container init,
+which trips `restart: unless-stopped` and brings the sandbox back
+with all tmux sessions inside it lost. SSH and host services keep
+working throughout. See
+[Troubleshooting: VPS unresponsive](#vps-unresponsive-cpu-pegged-ssh-hangs)
+for the failure mode this prevents.
+
 ## Using the sandbox cloud CLIs
 
 `hcloud`, `wrangler`, `gcloud`, and `supabase` are wrapped by PATH shims at `/opt/agent-vps-wrappers/`. Each shim transparently fetches the matching token from the `coding-agent-vps-tooling` Infisical project at command-time and injects it into the subprocess environment for that one invocation. The token never persists on disk inside the sandbox.
@@ -249,6 +264,15 @@ Named volumes (`sandbox-state-claude`, `sandbox-state-codex`,
 needed. Your tmux session is killed on container recreation (it's a
 process inside the container); reattach afterward.
 
+After any `docker-compose.yml` change that touches resource limits,
+verify the new limits actually applied (a pulled diff doesn't
+reconfigure a running container — `up -d` must recreate it):
+
+```bash
+docker inspect sandbox --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}'
+# expect: 3221225472 3221225472   (3 GiB each)
+```
+
 The `infisical login` session does NOT persist across rebuilds (no
 named volume — intentional, the sandbox holds no long-lived secret
 material at rest). After every container rebuild, run `infisical login`
@@ -274,6 +298,72 @@ separately-attached Hetzner Cloud volume — not in v1 scope (see
 [REQUIREMENTS.md §6](./REQUIREMENTS.md): backups are WON'T-v1).
 
 ## Troubleshooting
+
+### VPS unresponsive: CPU pegged, SSH hangs
+
+**Symptom**: `ssh dev@coding-agent-vps` hangs without prompt. Hetzner
+Cloud Console shows CPU at ~200% (both vCPUs maxed) for an extended
+period. If you can still get a shell, `uptime` shows a load average
+in double digits and `top` shows everything blocked on iowait.
+
+**What's almost certainly happening**: page-cache thrashing inside
+the sandbox. An agent (or several) approached the container's 3 GB
+`mem_limit` *and* the kernel's reclaim is evicting mmap'd executable
+pages that are immediately refaulted. This shouldn't happen in
+normal operation — the cgroup OOM killer should reap the heaviest
+process well before the host degrades — but it can if a single
+process grows too fast for the cgroup memory controller to react,
+or if host-side processes (not the container) are the offender.
+
+**Diagnose from your laptop** (no SSH needed):
+
+```bash
+# Linux laptop
+hcloud server metrics coding-agent-vps --type cpu \
+    --start "$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+    --end   "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# macOS laptop (BSD date)
+hcloud server metrics coding-agent-vps --type cpu \
+    --start "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)" \
+    --end   "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+If CPU is at ~200% for >5 min and not dropping, the host is stuck.
+
+**Recover**:
+
+1. Try ACPI reboot first — clean, lets filesystems flush:
+   ```bash
+   hcloud server reboot coding-agent-vps
+   ```
+   Wait ~60 s and re-check metrics. CPU should drop to baseline (~2 %).
+2. If CPU stays pegged after the ACPI reboot, the kernel was too
+   starved to honor the soft signal. Escalate to a hardware reset:
+   ```bash
+   hcloud server reset coding-agent-vps
+   ```
+   This is equivalent to pulling the power cord. The container's
+   `restart: unless-stopped` policy brings the sandbox back on its
+   own; named volumes (`sandbox-state-claude`, `sandbox-state-codex`,
+   `sandbox-state-gemini`) and `/work` survive. The tmux session is
+   lost (it's a process inside the container), as is any uncommitted
+   in-process agent state.
+3. After the box is back, postmortem with:
+   ```bash
+   ssh dev@coding-agent-vps 'sudo journalctl --boot=-1 --no-pager | grep -iE "out of memory|killed process|memory pressure" | tail'
+   ```
+   `/var/log/journal` is persistent on this image, so the previous
+   boot's journal survives the reset.
+
+**Why this is rare on current `main`**: the sandbox container is
+capped at 3 GB (`mem_limit`) and the host has a 2 GB swapfile with
+`vm.swappiness=10` (configured by `scripts/cloud-init-tasks.sh`).
+Together these ensure that an over-allocating in-container process
+hits the cgroup OOM killer first — one process dies, host stays up.
+If you find yourself hitting the host-level failure mode anyway,
+the offender is probably *outside* the sandbox: check `dockerd`,
+`cred-daemon`, or your own SSH sessions.
 
 ### VPS never appears in `tailscale status` after ~5 min
 

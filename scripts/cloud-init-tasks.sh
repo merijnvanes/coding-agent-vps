@@ -5,22 +5,94 @@
 # bootstrap.sh's job, run manually after the user SSHes in.
 #
 # What this does, in order:
-#   1. Create creds + dev users
-#   2. Pre-create the on-disk directory tree with correct ownership/modes
-#   3. Configure subuid/subgid for dev (default range only — the
+#   1. Configure host memory: 2 GB swapfile + vm.swappiness=10;
+#      enable persistent journald so post-incident logs survive reboot
+#   2. Create creds + dev users
+#   3. Pre-create the on-disk directory tree with correct ownership/modes
+#   4. Configure subuid/subgid for dev (default range only — the
 #      previous agent-sockets-group + custom subgid trick was dropped in
 #      favor of a 0666 ssh-agent socket; see daemon/ssh-agent-creds.service)
-#   4. Install Docker, disable the rootful daemon, set up rootless for dev
-#   5. Build the sandbox image (no registry — built locally)
-#   6. Install + enable systemd units
-#   7. Print next-step instructions
+#   5. Install Docker, disable the rootful daemon, set up rootless for dev
+#   6. Build the sandbox image (no registry — built locally)
+#   7. Install + enable systemd units
+#   8. Print next-step instructions
 
 set -euo pipefail
 
 log() { printf '[cloud-init-tasks] %s\n' "$*" >&2; }
 log "starting host setup"
 
-# === 1. Users ===
+# === 1. Memory: swap + swappiness ===
+#
+# Why: with 4 GB RAM and no swap, the kernel cannot reclaim memory by
+# paging out anonymous pages — its only reclaim option is evicting
+# clean file-cache pages. Under pressure that becomes page-cache
+# thrashing: mmap'd executables (Node, Claude/Codex JS bundles) get
+# evicted and immediately refaulted, pegging CPU at 100% iowait. The
+# OOM killer never fires because nothing technically fails to allocate
+# (processes are just refaulting pages they already mapped), so the
+# system stays stuck indefinitely. A 2 GB swapfile gives the kernel
+# somewhere to put dirty anonymous pages and lets the OOM killer fire
+# cleanly when both RAM and swap are exhausted. swappiness=10 keeps
+# swap as a last-resort cushion rather than letting the kernel page
+# out proactively. Paired with the cgroup mem_limit in
+# docker-compose.yml — together they ensure exhaustion kills one
+# in-container process, not the host.
+
+SWAPFILE=/swapfile
+SWAP_SIZE_MB=2048
+# Detect whether $SWAPFILE is already a valid swap area, not just present.
+# Guards against the partial-init case where `fallocate` succeeded on a
+# prior run but `mkswap` did not — leaving a plain file that `swapon`
+# would reject.
+needs_init=0
+if [[ ! -f $SWAPFILE ]]; then
+  needs_init=1
+elif ! blkid -p "$SWAPFILE" 2>/dev/null | grep -q 'TYPE="swap"'; then
+  log "WARNING: $SWAPFILE exists but is not a valid swap area; recreating"
+  swapon --show=NAME --noheadings | grep -qx "$SWAPFILE" && swapoff "$SWAPFILE"
+  rm -f "$SWAPFILE"
+  needs_init=1
+fi
+if (( needs_init )); then
+  log "creating ${SWAP_SIZE_MB}MB swapfile at $SWAPFILE"
+  fallocate -l "${SWAP_SIZE_MB}M" $SWAPFILE
+  chmod 0600 $SWAPFILE
+  mkswap $SWAPFILE >/dev/null
+fi
+# Activate if not already active (idempotent).
+swapon --show=NAME --noheadings | grep -qx "$SWAPFILE" || swapon $SWAPFILE
+# Persist across reboots.
+grep -q "^$SWAPFILE " /etc/fstab || echo "$SWAPFILE none swap sw 0 0" >> /etc/fstab
+
+SYSCTL_DROPIN=/etc/sysctl.d/99-coding-agent-vps.conf
+if [[ ! -f $SYSCTL_DROPIN ]] || ! grep -q '^vm.swappiness=10$' $SYSCTL_DROPIN; then
+  log "writing $SYSCTL_DROPIN"
+  cat > $SYSCTL_DROPIN <<'EOF'
+# Paired with /swapfile — see scripts/cloud-init-tasks.sh step 1.
+# Swap is an emergency cushion for the OOM killer, not active memory.
+vm.swappiness=10
+EOF
+fi
+# Always apply — cheap, idempotent, and reasserts the runtime value even
+# if it drifted (e.g. someone ran `sysctl -w` out of band, or a prior
+# run wrote the drop-in but bailed before reloading).
+sysctl -p $SYSCTL_DROPIN >/dev/null
+
+# Persistent journald — so a previous-boot journal (`journalctl --boot=-1`)
+# survives a hard `hcloud server reset`, enabling postmortems for the
+# very failure mode this step is designed to prevent. Stock Ubuntu noble
+# already ships with /var/log/journal present, but we don't want to
+# depend on a third party's default — create it explicitly. journald
+# auto-flips to persistent storage once the directory exists; the
+# restart picks it up in this boot without waiting for reboot.
+if [[ ! -d /var/log/journal ]]; then
+  log "enabling persistent journald (/var/log/journal)"
+  install -d -m 2755 -o root -g systemd-journal /var/log/journal
+  systemctl restart systemd-journald
+fi
+
+# === 2. Users ===
 
 # creds: dedicated system user for the credential daemon. NOT a login user.
 id -u creds >/dev/null 2>&1 \
@@ -43,7 +115,7 @@ id -u dev >/dev/null 2>&1 \
 # Passwordless sudo for dev (Tailscale SSH is the auth gate)
 install -m 0440 /dev/stdin /etc/sudoers.d/dev <<<'dev ALL=(ALL) NOPASSWD:ALL'
 
-# === 2. Directory tree ===
+# === 3. Directory tree ===
 
 install -d -m 0755 -o root   -g root   /etc/agent-vps
 install -d -m 0755 -o root   -g root   /var/lib/agent-vps
@@ -59,14 +131,14 @@ install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/sockets
 install -d -m 0777 -o dev -g dev /srv/dev
 install -d -m 0777 -o dev -g dev /srv/dev/projects
 
-# === 3. subuid / subgid for rootless Docker ===
+# === 4. subuid / subgid for rootless Docker ===
 # Default range — required by dockerd-rootless-setuptool.sh below. No custom
 # GID mapping needed any more (the agent-sockets-group approach was dropped
 # in favor of a 0666 ssh-agent socket; see daemon/ssh-agent-creds.service).
 grep -q '^dev:100000:' /etc/subuid || echo "dev:100000:65536" >> /etc/subuid
 grep -q '^dev:100000:' /etc/subgid || echo "dev:100000:65536" >> /etc/subgid
 
-# === 4. Docker + rootless setup ===
+# === 5. Docker + rootless setup ===
 
 if ! command -v docker >/dev/null 2>&1; then
   # Pinned versions — refresh at setup time per docs/SETUP.md "Refresh
@@ -135,12 +207,26 @@ sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
 sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
   bash -lc 'systemctl --user enable --now docker'
 
-# === 5. Build the sandbox image ===
+# Assert the cgroup memory controller is delegated to dev's user slice.
+# Without this, `mem_limit` in docker-compose.yml is silently a no-op
+# and the page-cache-thrashing failure mode (see step 1 rationale)
+# returns. Ubuntu noble's stock systemd delegates `memory pids cpu`,
+# but we don't want to rely on the distro default — fail loudly here
+# rather than discover it during the next incident.
+DEV_UID=$(id -u dev)
+DELEGATED=$(cat "/sys/fs/cgroup/user.slice/user-${DEV_UID}.slice/cgroup.controllers" 2>/dev/null || echo "")
+if ! grep -qw memory <<<"$DELEGATED"; then
+  log "ERROR: memory cgroup controller not delegated to dev (got: '${DELEGATED}')"
+  log "       docker-compose.yml mem_limit would be silently ignored — aborting"
+  exit 1
+fi
+
+# === 6. Build the sandbox image ===
 log "building sandbox image (~5–10 min on a CX23)"
 sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
   bash -lc 'cd /opt/agent-vps && docker build -t coding-agent-vps/sandbox:latest ./sandbox'
 
-# === 6. systemd units ===
+# === 7. systemd units ===
 log "installing systemd units"
 install -m 0644 /opt/agent-vps/daemon/cred-daemon.service      /etc/systemd/system/
 install -m 0644 /opt/agent-vps/daemon/cred-daemon.timer        /etc/systemd/system/

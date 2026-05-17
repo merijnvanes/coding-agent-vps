@@ -85,6 +85,7 @@ Three zones on the VPS, three trust levels.
   - HTTPS to Infisical for the `coding-agent-vps-tooling` project (account-wide cloud-CLI tokens) and per-app projects (project-specific app secrets). One fetch per CLI invocation, via `infisical run --`. Tokens enter the subprocess environment for the duration of one command, never persist on disk inside the sandbox.
 - **Talks to creds zone**: only via the bridged ssh-agent socket.
 - **Cannot reach**: host zone files, creds zone files (`/etc/agent-vps`, `/var/lib/agent-vps/creds`), `/opt/agent-vps`.
+- **Resource limits**: `mem_limit: 3g` in `docker-compose.yml` bounds the container's cgroup to 3 GB of the host's 3.7 GB RAM (`memswap_limit: 3g` denies any swap allowance). When breached, the in-container cgroup OOM killer reaps the heaviest in-container process; the host stays responsive. Paired with a 2 GB host swapfile + `vm.swappiness=10` (set by `scripts/cloud-init-tasks.sh` step 1) so the host's own OOM killer also has signal to fire on if a host-side process ever overruns. Together these prevent the page-cache-thrashing failure mode where the kernel iowaits forever instead of killing anything — see [USAGE.md "VPS unresponsive"](./USAGE.md#vps-unresponsive-cpu-pegged-ssh-hangs).
 - **Trust**: lowest — agent runs in YOLO mode here. Token exposure is bounded to one subprocess's lifetime.
 
 ## Components
