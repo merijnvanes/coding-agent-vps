@@ -233,21 +233,45 @@ install -m 0644 /opt/agent-vps/daemon/cred-daemon.timer        /etc/systemd/syst
 install -m 0644 /opt/agent-vps/daemon/ssh-agent-creds.service  /etc/systemd/system/
 install -m 0644 /opt/agent-vps/daemon/ssh-agent-bridge.service /etc/systemd/system/
 systemctl daemon-reload
-# ssh-agent for creds — must be running before cred-daemon attempts ssh-add
-systemctl enable --now ssh-agent-creds.service
-# socat bridge — must be running before the sandbox can use the agent
-# (ssh-agent's peer-UID check rejects direct sandbox connections; see
-#  daemon/ssh-agent-bridge.service for the rationale)
-systemctl enable --now ssh-agent-bridge.service
-# Daily refresh timer. --now starts it in this boot so the schedule is live
-# without waiting for a reboot.
-systemctl enable --now cred-daemon.timer
-# Also enable cred-daemon.service for boot. It's a oneshot wanted by
-# multi-user.target — running at boot ensures ssh-agent gets the GitHub
-# SSH key loaded after every reboot (otherwise the agent stays empty
-# until the next timer fire or a manual `systemctl start cred-daemon`).
-# We don't `--now` here because the bootstrap secret doesn't exist yet
-# at cloud-init time; bootstrap.sh triggers the first manual run.
+
+# Enable for next boot, then start only if not already active.
+#
+# Why split, not `enable --now`: re-running this script on a healthy
+# host (see docs/USAGE.md "cloud-init status shows error" recovery)
+# would otherwise force a start cycle on the already-running ssh-agent
+# units. If systemd loses track of the live instance for any reason
+# during that cycle, the new ssh-agent's bind() fails because the old
+# instance still owns its Unix socket, the unit lands in `failed`, and
+# sandbox git push breaks with "Permission denied (publickey)". The
+# Unix-socket cleanup that handles the stale-socket case lives in the
+# service units themselves (`ExecStartPre=rm -f <socket>` in
+# daemon/ssh-agent-creds.service and daemon/ssh-agent-bridge.service),
+# so any start path is self-healing; this loop layer just avoids
+# starting an instance we don't need to disturb at all.
+#
+# Caveat: after this script overwrites a service file via `install`
+# and `daemon-reload` picks up the new metadata, an already-running
+# instance keeps the OLD runtime behavior until manually restarted.
+# Service-file changes that need to take effect immediately require:
+#   sudo systemctl restart ssh-agent-creds.service ssh-agent-bridge.service
+# Acceptable trade because restart clears any ssh-agent keys cred-daemon
+# had loaded — forcing it silently on every script re-run is worse.
+#
+# Ordering matters: ssh-agent-creds first (the bridge's socat connects
+# to its socket), bridge second, timer last. cred-daemon.service itself
+# is enabled separately below (intentionally not started — the
+# bootstrap secret doesn't exist yet at cloud-init time).
+for unit in ssh-agent-creds.service ssh-agent-bridge.service cred-daemon.timer; do
+  systemctl enable "$unit"
+  systemctl is-active --quiet "$unit" || systemctl start "$unit"
+done
+
+# cred-daemon.service is a oneshot wanted by multi-user.target — running
+# at boot ensures ssh-agent gets the GitHub SSH key loaded after every
+# reboot (otherwise the agent stays empty until the next timer fire or
+# a manual `systemctl start cred-daemon`). We don't start it here
+# because the bootstrap secret doesn't exist yet at cloud-init time;
+# bootstrap.sh triggers the first manual run.
 systemctl enable cred-daemon.service
 
 log "cloud-init-tasks complete."

@@ -25,6 +25,11 @@ Group=creds
 # cred-daemon continues to use ssh-agent.sock directly (same UID, no
 # bridge needed) — only the sandbox uses ssh-agent-bridge.sock.
 ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
+# Remove any stale bridge socket from a previous instance (same rationale
+# as ssh-agent-creds.service: socat's UNIX-LISTEN bind() also fails on a
+# pre-existing socket file; `reuseaddr` only covers TCP-style SO_REUSEADDR,
+# not Unix-socket path cleanup). Safe — each ExecStart creates a fresh socket.
+ExecStartPre=/usr/bin/rm -f /var/lib/agent-vps/sockets/ssh-agent-bridge.sock
 ExecStart=/usr/bin/socat UNIX-LISTEN:/var/lib/agent-vps/sockets/ssh-agent-bridge.sock,fork,reuseaddr,mode=0666 UNIX-CONNECT:/var/lib/agent-vps/sockets/ssh-agent.sock
 KillMode=mixed
 Restart=on-failure

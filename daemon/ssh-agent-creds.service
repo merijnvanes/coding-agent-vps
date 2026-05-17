@@ -19,6 +19,12 @@ Group=creds
 # namespace mapping that rootless Docker doesn't cleanly expose; the practical
 # access set is identical. Documented as accepted residual.
 ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
+# Remove any stale socket file from a previous instance that didn't shut
+# down cleanly (e.g. host hard-reset, a failed re-run of cloud-init-tasks.sh).
+# ssh-agent's bind() would otherwise fail with EADDRINUSE and leave this
+# unit in `failed` state — sandbox git push then breaks with "Permission
+# denied (publickey)". Safe because each ExecStart creates a fresh socket.
+ExecStartPre=/usr/bin/rm -f /var/lib/agent-vps/sockets/ssh-agent.sock
 ExecStart=/usr/bin/ssh-agent -a /var/lib/agent-vps/sockets/ssh-agent.sock
 ExecStartPost=/bin/chmod 0666 /var/lib/agent-vps/sockets/ssh-agent.sock
 KillMode=mixed
