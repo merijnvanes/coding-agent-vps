@@ -48,9 +48,20 @@ log "starting host setup"
 # Override via HOST_RAM_MB env var for testing.
 
 # Derive sizes from /proc/meminfo (or HOST_RAM_MB override for testing).
+# Capture override-ness *before* the assignment so we can log it honestly.
+# The `-n` test and the `:-` assignment have aligned semantics: both
+# treat empty-string as "fall back to /proc/meminfo," so an honest
+# `HOST_RAM_MB=` invocation logs source=/proc/meminfo, which matches
+# what's actually used downstream.
+if [[ -n "${HOST_RAM_MB-}" ]]; then
+  ram_source="HOST_RAM_MB env override"
+else
+  ram_source="/proc/meminfo MemTotal"
+fi
 HOST_RAM_MB=${HOST_RAM_MB:-$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)}
 HOST_RESERVE_MB=${HOST_RESERVE_MB:-1024}
 CONTAINER_MEM_MB=$((HOST_RAM_MB - HOST_RESERVE_MB))
+
 # Floor: cx23 (~4 GB host → ~2.9 GB container) is the real usability
 # floor — anything below ~2 GB container can boot the sandbox but won't
 # fit a useful Claude/Codex working set. Refuse to set up something we
@@ -60,7 +71,21 @@ if (( CONTAINER_MEM_MB < 2048 )); then
   exit 1
 fi
 MEMORY_HIGH_MB=$((CONTAINER_MEM_MB * 9 / 10))
-log "memory: host=${HOST_RAM_MB}MB reserve=${HOST_RESERVE_MB}MB container=${CONTAINER_MEM_MB}MB high=${MEMORY_HIGH_MB}MB"
+
+# Human-friendly GB values for the summary (awk for floating-point div)
+HOST_RAM_GB=$(awk -v mb="$HOST_RAM_MB"           'BEGIN{printf "%.2f", mb/1024}')
+CONTAINER_MEM_GB=$(awk -v mb="$CONTAINER_MEM_MB" 'BEGIN{printf "%.2f", mb/1024}')
+MEMORY_HIGH_GB=$(awk -v mb="$MEMORY_HIGH_MB"     'BEGIN{printf "%.2f", mb/1024}')
+
+log ""
+log "=== Memory configuration (step 1) ==="
+log "  detected host RAM:  ${HOST_RAM_MB} MB (${HOST_RAM_GB} GB) [source: ${ram_source}]"
+log "  host reserve:       ${HOST_RESERVE_MB} MB (default 1024; override via HOST_RESERVE_MB env)"
+log "  → container mem_limit:              ${CONTAINER_MEM_MB} MB (${CONTAINER_MEM_GB} GB)"
+log "  → slice MemoryHigh (~90% throttle): ${MEMORY_HIGH_MB} MB (${MEMORY_HIGH_GB} GB)"
+log "  → swap (constant):                  2048 MB"
+log "  → vm.swappiness:                    10"
+log ""
 
 # Write the docker-compose env file so the container picks up the
 # derived limits. docker-compose.yml uses `mem_limit: ${SANDBOX_MEM_LIMIT:-3g}`
@@ -73,6 +98,7 @@ cat > /opt/agent-vps/.env.tmp <<EOF
 SANDBOX_MEM_LIMIT=${CONTAINER_MEM_MB}m
 EOF
 mv /opt/agent-vps/.env.tmp /opt/agent-vps/.env
+log "wrote /opt/agent-vps/.env with SANDBOX_MEM_LIMIT=${CONTAINER_MEM_MB}m"
 
 SWAPFILE=/swapfile
 SWAP_SIZE_MB=2048
@@ -84,7 +110,7 @@ needs_init=0
 if [[ ! -f $SWAPFILE ]]; then
   needs_init=1
 elif ! blkid -p "$SWAPFILE" 2>/dev/null | grep -q 'TYPE="swap"'; then
-  log "WARNING: $SWAPFILE exists but is not a valid swap area; recreating"
+  log "note: $SWAPFILE exists but is not a valid swap area — recreating (self-healing)"
   swapon --show=NAME --noheadings | grep -qx "$SWAPFILE" && swapoff "$SWAPFILE"
   rm -f "$SWAPFILE"
   needs_init=1
@@ -284,6 +310,7 @@ MemoryHigh=${MEMORY_HIGH_MB}M
 EOF
 chown dev:dev "$DROPIN_DIR/10-host-specific.conf"
 chmod 0644 "$DROPIN_DIR/10-host-specific.conf"
+log "wrote $DROPIN_DIR/10-host-specific.conf with MemoryHigh=${MEMORY_HIGH_MB}M"
 
 # daemon-reload picks up the drop-in. `set-property` forces the kernel
 # cgroup file to be re-written from the unit spec on re-runs — daemon-
@@ -300,6 +327,7 @@ sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID MEMORY_HIGH_MB="$MEMORY_HIGH_M
   # set-property here is just "apply this to the live cgroup now."
   systemctl --user set-property --runtime sandbox.slice MemorySwapMax=0 MemoryHigh="${MEMORY_HIGH_MB}M"
 '
+log "applied to live sandbox.slice: MemorySwapMax=0, MemoryHigh=${MEMORY_HIGH_MB}M (--runtime, drop-in is persistent record)"
 
 # If the sandbox container already exists (re-run after a host resize
 # via `hcloud server change-type`), live-update its memory cap without
@@ -309,20 +337,28 @@ sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID MEMORY_HIGH_MB="$MEMORY_HIGH_M
 # the only path that adjusts a running container's cgroup limit in
 # place — `docker compose up -d` would force recreation, killing tmux.
 if sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID docker inspect sandbox >/dev/null 2>&1; then
-  log "live-updating sandbox container mem_limit to ${CONTAINER_MEM_MB}m"
+  log "sandbox container exists — live-updating mem_limit to ${CONTAINER_MEM_MB}m (no recreate)"
   # Primary: update the RAM cap. This is the one that matters — the
   # parent sandbox.slice already enforces memory.swap.max=0 regardless
   # of the container's own swap setting.
-  if ! sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID \
-       docker update --memory "${CONTAINER_MEM_MB}m" sandbox; then
-    log "WARN: docker update --memory failed; run \`docker compose up -d --force-recreate sandbox\` manually to pick up new mem_limit"
+  if sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID \
+     docker update --memory "${CONTAINER_MEM_MB}m" sandbox >/dev/null; then
+    log "  docker update --memory ${CONTAINER_MEM_MB}m: OK"
+  else
+    log "  WARN: docker update --memory failed; run \`docker compose up -d --force-recreate sandbox\` manually to pick up new mem_limit"
   fi
   # Best-effort: also update the container's own memory-swap to match,
   # for HostConfig consistency. Rootless cgroup v2 swap control is
   # spotty so we tolerate failure here — slice's MemorySwapMax=0 is the
   # actual enforcement.
-  sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID \
-    docker update --memory-swap "${CONTAINER_MEM_MB}m" sandbox >/dev/null 2>&1 || true
+  if sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID \
+     docker update --memory-swap "${CONTAINER_MEM_MB}m" sandbox >/dev/null 2>&1; then
+    log "  docker update --memory-swap ${CONTAINER_MEM_MB}m: OK"
+  else
+    log "  (memory-swap update declined — relying on slice MemorySwapMax=0, which is the actual enforcement)"
+  fi
+else
+  log "sandbox container not yet created — limits will apply on next \`docker compose up -d\`"
 fi
 
 # === 6. Build the sandbox image ===
@@ -378,5 +414,19 @@ done
 # bootstrap.sh triggers the first manual run.
 systemctl enable cred-daemon.service
 
+log ""
+log "=== Summary: target resource limits configured for this host ==="
+log "  (any 'WARN' lines above indicate a target was not fully applied — scroll up to check)"
+log "  host RAM:                ${HOST_RAM_MB} MB (${HOST_RAM_GB} GB) [source: ${ram_source}]"
+log "  container mem_limit:     ${CONTAINER_MEM_MB} MB (${CONTAINER_MEM_GB} GB)  → /opt/agent-vps/.env"
+log "  slice MemoryHigh:        ${MEMORY_HIGH_MB} MB (${MEMORY_HIGH_GB} GB)  → sandbox.slice.d/10-host-specific.conf"
+log "  slice MemorySwapMax:     0 (container denied swap; host's 2 GB swap reserved)"
+log "  host swap:               2048 MB (constant), vm.swappiness=10"
+log ""
+log "Verify post-deploy (run as the dev user — rootless Docker daemon is per-user):"
+log "  cat /opt/agent-vps/.env                                                   # → SANDBOX_MEM_LIMIT=${CONTAINER_MEM_MB}m"
+log "  docker inspect sandbox --format '{{.HostConfig.Memory}}'                  # → $((CONTAINER_MEM_MB * 1024 * 1024)) (bytes)"
+log "  cat ~/.config/systemd/user/sandbox.slice.d/10-host-specific.conf"
+log ""
 log "cloud-init-tasks complete."
 log "Next: SSH in via Tailscale, then run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"
