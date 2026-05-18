@@ -31,10 +31,19 @@ packages:
   - openssh-client
   - openssh-server
   - openssl
+  # slirp4netns: required by rootless Docker for user-mode networking.
+  # Normally pulled in as a Recommends of docker-ce-rootless-extras, but
+  # scripts/cloud-init-tasks.sh installs Docker with --no-install-recommends
+  # to keep the host minimal — so the dependency gets stripped and rootless
+  # dockerd fails to start with "One of slirp4netns, pasta, or vpnkit needs
+  # to be installed". Pin via Ubuntu's main repo here, before any of the
+  # script's Docker setup runs.
+  - slirp4netns
   - socat
   - sudo
   - tmux
   - ufw
+  # uidmap: ships newuidmap/newgidmap, also a rootless-Docker prerequisite.
   - uidmap
 
 write_files:

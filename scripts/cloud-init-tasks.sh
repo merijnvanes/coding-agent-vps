@@ -230,6 +230,13 @@ if ! command -v docker >/dev/null 2>&1; then
   # we invoke below to wire up rootless Docker for the dev user. The Docker
   # convenience script installed this implicitly; doing apt by hand we have
   # to name it.
+  #
+  # Note: rootless Docker has two stock-Ubuntu dependencies (slirp4netns
+  # for user-mode networking, uidmap for newuidmap/newgidmap) that would
+  # normally be pulled in as Recommends of docker-ce-rootless-extras.
+  # --no-install-recommends below strips them — they're installed from
+  # cloud-init.yaml's `packages:` list instead. If you copy this Docker
+  # install block elsewhere, you need both of those too.
   apt-get install -y --no-install-recommends \
     docker-ce="${DOCKER_CE_VERSION}" \
     docker-ce-cli="${DOCKER_CE_VERSION}" \
@@ -238,6 +245,15 @@ if ! command -v docker >/dev/null 2>&1; then
     docker-compose-plugin="${DOCKER_COMPOSE_VERSION}" \
     docker-ce-rootless-extras="${DOCKER_CE_VERSION}"
 fi
+
+# Self-heal: ensure slirp4netns is present even on a partially-configured
+# re-run host. It's normally installed via cloud-init.yaml's packages list
+# (alongside uidmap, for the same reason), but a host where Docker is
+# present yet slirp4netns was somehow stripped would otherwise blow up
+# at `dockerd-rootless-setuptool.sh install` below — exactly the scenario
+# that bit the cx33 provision before this guard existed.
+command -v slirp4netns >/dev/null \
+  || apt-get install -y --no-install-recommends slirp4netns
 
 # We use rootless Docker; disable the rootful daemon.
 systemctl disable --now docker.service docker.socket 2>/dev/null || true
