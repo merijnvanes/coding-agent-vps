@@ -37,24 +37,34 @@ services:
     # SIGKILLed at teardown — acceptable since no tmux state is persisted.
     init: true
 
-    # Memory cap — full story in scripts/cloud-init-tasks.sh step 1
-    # and daemon/sandbox.slice.
+    # Memory cap — adaptive to host RAM. Full story in
+    # scripts/cloud-init-tasks.sh step 1 and daemon/sandbox.slice.
     #
-    # mem_limit bounds container RAM at 3 GB of the host's 3.7 GB,
-    # leaving ~700 MB for sshd/dockerd/tailscaled. On breach, in-container
-    # allocations get ENOMEM at the cgroup boundary — most language
-    # runtimes (Python, Node.js) surface this as a language-level OOM
-    # error and exit; the cgroup OOM killer reaps anything that doesn't
-    # self-terminate as a backstop. Host stays responsive throughout.
+    # Values are read from /opt/agent-vps/.env (auto-generated at
+    # provision time by cloud-init-tasks.sh based on detected host
+    # RAM, using the formula: container_limit = MemTotal − 1024 MB
+    # reserved for host processes). The 3g default below approximates
+    # a cx23 (~4 GB host → ~2.9 GB container after the ~100 MB the
+    # kernel/firmware reserves from nominal RAM), so the compose file
+    # alone still works on a cx23 without .env present. On larger
+    # hosts (approximate values after firmware reserve):
+    #   - cx33 (8 GB host)  → SANDBOX_MEM_LIMIT ≈ 6900m
+    #   - cx43 (16 GB host) → SANDBOX_MEM_LIMIT ≈ 15050m
+    #
+    # On breach, in-container allocations get ENOMEM at the cgroup
+    # boundary — most language runtimes (Python, Node.js) surface this
+    # as a language-level OOM error and exit; the cgroup OOM killer
+    # reaps anything that doesn't self-terminate as a backstop. Host
+    # stays responsive throughout.
     #
     # cgroup_parent places the container under daemon/sandbox.slice,
     # which enforces memory.swap.max=0 — denying the container any
     # swap allowance so the host's 2 GB swap stays reserved as the
     # host's own emergency reclaim. We need the slice because Docker's
-    # `memswap_limit: 3g` is silently ignored on rootless Docker +
-    # cgroup v2 (the field is set on HostConfig but never applied to
-    # the cgroup). See daemon/sandbox.slice for the empirical story.
-    mem_limit: 3g
+    # `memswap_limit` is silently ignored on rootless Docker + cgroup
+    # v2 (the field is set on HostConfig but never applied to the
+    # cgroup). See daemon/sandbox.slice for the empirical story.
+    mem_limit: ${SANDBOX_MEM_LIMIT:-3g}
     cgroup_parent: sandbox.slice
 
     # Host-loopback dev-server ports — reachable ONLY via SSH port forwarding

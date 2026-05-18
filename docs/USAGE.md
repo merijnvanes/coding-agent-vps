@@ -21,10 +21,14 @@ is on by default).
 
 ### Running multiple agents in parallel
 
-The sandbox container is capped at 3 GB of RAM (`mem_limit` in
-`docker-compose.yml`). A single Claude / Codex session typically
-sits at 300–700 MB resident, so 2–3 concurrent agents is comfortable
-on the default CX23. If the cap is exceeded, the offending process
+The sandbox container's RAM cap is **adaptive to the host size**:
+`scripts/cloud-init-tasks.sh` detects total RAM at provision time and
+sets `mem_limit = MemTotal − 1024 MB` (the 1 GB reserved for host
+services like sshd/dockerd/tailscaled, which don't scale with RAM).
+A single Claude / Codex session typically sits at 300–700 MB resident,
+so on a default CX23 (~4 GB host → ~2.9 GB container after firmware
+reserve) you'll get 2–3 concurrent agents comfortably; CX33 (~8 GB →
+~6.9 GB) handles 6–8; CX43 (~16 GB → ~15 GB) handles a dozen-plus. If the cap is exceeded, the offending process
 hits `ENOMEM` at the cgroup boundary — most language runtimes
 (Python, Node.js, etc.) surface this as a visible out-of-memory
 error (`MemoryError`, `JavaScript heap out of memory`, …) and exit
@@ -276,9 +280,13 @@ must recreate it, and slice changes apply only on the next
 container recreation or `set-property`):
 
 ```bash
+# Expected mem_limit = MemTotal − 1024 MB. On a ~4 GB cx23 that's
+# roughly 2.9 GB; on ~8 GB cx33 roughly 6.9 GB; on ~16 GB cx43 ~15 GB.
+# Read your derived value from /opt/agent-vps/.env first:
+cat /opt/agent-vps/.env
+
 # Docker-side: RAM cap and slice placement
 docker inspect sandbox --format '{{.HostConfig.Memory}} {{.HostConfig.CgroupParent}}'
-# expect: 3221225472 sandbox.slice
 
 # Slice-side: the actual swap-denial enforcement (effective cap on
 # all descendants of the slice, including the container's cgroup)
@@ -373,9 +381,11 @@ If CPU is at ~200% for >5 min and not dropping, the host is stuck.
    boot's journal survives the reset.
 
 **Why this is rare on current `main`**: the sandbox container is
-hard-capped at 3 GB total (`mem_limit: 3g` for RAM + `cgroup_parent:
-sandbox.slice` enforcing `memory.swap.max=0` so no swap allowance),
-and the host has a 2 GB swapfile with `vm.swappiness=10` (all configured
+hard-capped at `<host RAM − 1 GB>` total (RAM via `mem_limit` in
+`docker-compose.yml`, derived from `/opt/agent-vps/.env` written at
+provision time by `scripts/cloud-init-tasks.sh`; swap denied via
+`cgroup_parent: sandbox.slice` enforcing `memory.swap.max=0`), and
+the host has a 2 GB swapfile with `vm.swappiness=10` (all configured
 by `scripts/cloud-init-tasks.sh`). Together these ensure an
 over-allocating in-container process fails at the cgroup boundary
 (`ENOMEM` → language-level OOM error → process exit, with cgroup
