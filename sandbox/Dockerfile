@@ -96,6 +96,18 @@ RUN mkdir -p /etc/ssh && \
 # Pointing COREPACK_HOME at a shared system path makes root's activation the
 # one every user resolves. The build-time assertion after the `agent` useradd
 # proves it, so this can't regress silently again.
+#
+# The directory is chowned to `agent` in that same useradd block, NOT left
+# root-owned. A project that declares `"packageManager": "pnpm@X"` makes
+# corepack fetch exactly X into COREPACK_HOME, and a read-only directory turns
+# that into "Failed to create cache directory" for the whole project (pnpm 11
+# refuses the mismatch too, and its `pmOnFail` escape hatch is rejected in the
+# global config — project-level only). Writable is also the honest trade: a
+# project's packageManager field is that project's own pin, and the dependency
+# cooldown does not depend on which pnpm binary runs — minimumReleaseAge is
+# read from ~agent/.config/pnpm/config.yaml either way. Verified: under a
+# project-supplied pnpm 11.20.0, `pnpm add` still resolved claude-code to
+# 2.1.235 while the registry's latest was 2.1.246.
 ENV COREPACK_HOME=/usr/local/corepack
 
 # Manual NodeSource APT setup — inlines what `deb.nodesource.com/setup_22.x`
@@ -121,8 +133,7 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g "npm@${NPM_VERSION}" \
     && corepack enable \
-    && corepack prepare "pnpm@${PNPM_VERSION}" --activate \
-    && chmod -R a+rX "${COREPACK_HOME}"
+    && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 # pnpm global bin dir on PATH so `pnpm add -g X` produces invokable commands.
 # pnpm 9+ installs global binaries to $PNPM_HOME/bin and errors out at
@@ -303,15 +314,25 @@ RUN userdel -r ubuntu 2>/dev/null || true \
     && printf 'minimumReleaseAge: 10080\nblockExoticSubdeps: true\n' \
         > /home/agent/.config/pnpm/config.yaml \
     && printf 'exclude-newer = "7 days"\n' > /home/agent/.config/uv/uv.toml \
-    && chown -R agent:agent /work /home/agent
+    && chown -R agent:agent /work /home/agent "${COREPACK_HOME}"
 
 # Prove the PNPM_VERSION pin actually reaches the `agent` user. corepack
 # resolves per-user by default, so a pin activated as root is easy to lose
 # (see the COREPACK_HOME comment on the Node block). Failing the build here
 # beats discovering the drift months later on a running container.
-RUN got="$(su agent -s /bin/bash -c 'pnpm --version')" \
-    && [ "$got" = "${PNPM_VERSION}" ] \
-    || { echo "PNPM pin not honored for user agent: want ${PNPM_VERSION}, got ${got}" >&2; exit 1; }
+# The write check guards the other half: if COREPACK_HOME is not writable by
+# agent, every project declaring a "packageManager" field dies with "Failed to
+# create cache directory" instead of fetching the version it asked for.
+RUN set -e; \
+    got="$(su agent -s /bin/bash -c 'pnpm --version')"; \
+    if [ "$got" != "${PNPM_VERSION}" ]; then \
+      echo "pnpm pin not honored for user agent: want ${PNPM_VERSION}, got $got" >&2; \
+      exit 1; \
+    fi; \
+    if ! su agent -s /bin/bash -c "test -w '${COREPACK_HOME}/v1'"; then \
+      echo "${COREPACK_HOME}/v1 not writable by agent: project packageManager pins will fail" >&2; \
+      exit 1; \
+    fi
 
 # --- entrypoint + env-export sourcing for ALL shell flavors ---
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
