@@ -44,6 +44,55 @@ if [[ $# -gt 0 ]]; then
   exec "$@"
 fi
 
+# --- Agent Skills bridge ---
+# The skills repo (github.com/merijnvanes/skills) is a checkout under /work,
+# i.e. on the bind mount, so it survives container rebuilds and is updated by
+# a plain `git pull`. Its own README defines the canonical layout: the repo IS
+# `~/.agents/skills`, and each agent CLI needs a symlink farm because none of
+# them read `.agents/` directly yet.
+#
+# Doing this at every container start rather than once by hand is the whole
+# point. `~/.agents` and the per-agent symlinks live in the container's
+# writable layer, which `docker compose up -d --build` discards. Wiring them
+# up by hand produces skills that work for months and then silently vanish on
+# the next rebuild, leaving dangling symlinks behind (observed 2026-08-26:
+# five dead links, three repo skills never bridged at all). Rebuilding the
+# farm here is idempotent and picks up skills added to the repo since.
+SKILLS_SRC=/work/skills
+if [[ -d "$SKILLS_SRC" ]]; then
+  mkdir -p "$HOME/.agents"
+  ln -sfn "$SKILLS_SRC" "$HOME/.agents/skills"
+
+  for dest in "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.gemini/skills"; do
+    # Only bridge into agents that are actually installed (their home dir is
+    # a named volume mounted by docker-compose.yml).
+    if [[ ! -d "$(dirname "$dest")" ]]; then
+      continue
+    fi
+    mkdir -p "$dest"
+
+    for s in "$SKILLS_SRC"/*/; do
+      if [[ -f "$s/SKILL.md" ]]; then
+        ln -sfn "$s" "$dest/$(basename "$s")"
+      fi
+    done
+
+    # Drop links that point into the skills tree but no longer resolve, so a
+    # skill deleted upstream doesn't linger. Links pointing anywhere else
+    # (hand-installed skills, plugin-managed ones) are left alone.
+    while IFS= read -r -d '' link; do
+      target="$(readlink "$link")"
+      case "$target" in
+        "$SKILLS_SRC"/*|"$HOME/.agents/skills"/*)
+          if [[ ! -e "$link" ]]; then
+            rm -f "$link"
+          fi
+          ;;
+      esac
+    done < <(find "$dest" -maxdepth 1 -type l -print0)
+  done
+fi
+
 # Otherwise: start the tmux server with a default `main` session so the
 # user's first `docker exec -it sandbox tmux attach -t main` Just Works.
 # Idempotent: check for existing session first, then create only if absent.
