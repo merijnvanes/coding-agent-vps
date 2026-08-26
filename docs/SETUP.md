@@ -262,13 +262,15 @@ curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_VERS
 ```
 
 For `supabase` also fetch the matching SHA256 (update
-`SUPABASE_CLI_SHA256` alongside `SUPABASE_CLI_VERSION`). ⚠️ Supabase's
-checksums file is named with the version embedded
-(`supabase_<VERSION>_checksums.txt`), NOT a generic `checksums.txt`:
+`SUPABASE_CLI_SHA256` alongside `SUPABASE_CLI_VERSION`). ⚠️ Supabase now
+publishes a generic `checksums.txt`; the older version-embedded name
+(`supabase_<VERSION>_checksums.txt`) 404s. The rows inside name the
+**versioned** asset, while the Dockerfile downloads the unversioned
+alias. Both names serve identical bytes, so grep the versioned row:
 
 ```bash
-curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_${SUPABASE_CLI_VERSION}_checksums.txt" \
-  | awk '$2 == "supabase_linux_amd64.tar.gz" {print $1}'
+curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/checksums.txt" \
+  | awk -v f="supabase_${SUPABASE_CLI_VERSION}_linux_amd64.tar.gz" '$2 == f {print $1}'
 ```
 
 **APT-installed** (`nodejs`, `tailscale`, `google-cloud-cli`,
@@ -278,6 +280,21 @@ cross-reference each vendor's changelog for the date.
 
 Each recipe below prints the available versions in the upstream repo;
 pick the latest one whose changelog entry is dated ≥7 days ago.
+
+Where a vendor's changelog is awkward to machine-read (Docker,
+Infisical), date the package from the repo itself instead. Every Debian
+`Packages` entry carries a `Filename:` pointing into the pool; the
+upload date is the pool file's HTTP `Last-Modified`:
+
+```bash
+# usage: pkgdate <packages-url> <repo-base-url> <pkg> <version>
+pkgdate() {
+  fn=$(curl -fsSL "$1" | awk -v p="$3" -v v="$4" \
+    'BEGIN{re="^Package: "p"$"} $0~re{f=1;pv="";next} /^Package: /{f=0}
+     f&&/^Version: /{pv=$2} f&&/^Filename: /{if(pv==v){print $2; exit}}')
+  curl -sI "$2/$fn" | awk -F': ' 'tolower($1)=="last-modified"{print $2}'
+}
+```
 
 **nodejs** — changelog: <https://nodejs.org/en/about/previous-releases>
 

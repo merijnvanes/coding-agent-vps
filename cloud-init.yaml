@@ -100,7 +100,7 @@ runcmd:
   # versions" — pick the latest stable that is ≥7 days old and that is still
   # present in pkgs.tailscale.com's noble Packages file (older versions may
   # have been GC'd from the repo).
-  - apt-get install -y --no-install-recommends tailscale=1.96.2
+  - apt-get install -y --no-install-recommends tailscale=1.102.2
   # No --accept-routes: the VPS doesn't need to route through any subnet
   # routes peers advertise (laptop LANs, corporate networks, etc.). The
   # design's asymmetric-reachability promise is cleaner without it.

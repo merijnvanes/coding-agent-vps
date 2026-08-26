@@ -208,10 +208,10 @@ if ! command -v docker >/dev/null 2>&1; then
   # independent release cadences. Lookup: query the Docker apt repo
   # (`apt-cache madison <pkg>` after adding the repo, or curl the noble
   # Packages file under download.docker.com/linux/ubuntu/dists/noble/).
-  DOCKER_CE_VERSION="5:29.4.2-1~ubuntu.24.04~noble"
-  CONTAINERD_VERSION="2.2.2-1~ubuntu.24.04~noble"
-  DOCKER_BUILDX_VERSION="0.33.0-1~ubuntu.24.04~noble"
-  DOCKER_COMPOSE_VERSION="5.1.2-1~ubuntu.24.04~noble"
+  DOCKER_CE_VERSION="5:29.7.2-1~ubuntu.24.04~noble"
+  CONTAINERD_VERSION="2.3.3-1~ubuntu.24.04~noble"
+  DOCKER_BUILDX_VERSION="0.36.1-1~ubuntu.24.04~noble"
+  DOCKER_COMPOSE_VERSION="5.5.0-1~ubuntu.24.04~noble"
 
   # Manual Docker APT setup (no `get.docker.com | sh`). Inlines what the
   # convenience script does: fetch the static GPG key file, write keyring

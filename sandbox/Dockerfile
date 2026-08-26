@@ -15,29 +15,31 @@ FROM ubuntu:24.04
 # APT pins for NodeSource, gcloud, and Infisical require the repo metadata
 # to be queryable (curl the Packages file or apt-cache madison after adding
 # the repo). The refresh procedure documents the lookup mechanics per tool.
-ARG NODEJS_VERSION=22.22.0-1nodesource1
+ARG NODEJS_VERSION=22.23.2-1nodesource1
 # npm bundled with Node 22 is 10.x, which does NOT support `min-release-age`.
 # Bump to npm 11+ so the /etc/npmrc cooldown actually applies to `npm install`.
-ARG NPM_VERSION=11.13.0
-ARG PNPM_VERSION=11.0.7
-ARG UV_VERSION=0.11.11
-ARG UV_SHA256=a767848254391855c96df271e9ca8b7f72dd172d310460447853d25d907b9ae0
-ARG GCLOUD_VERSION=458.0.0-0
-ARG WRANGLER_VERSION=4.88.0
-ARG CLAUDE_CODE_VERSION=2.1.200
-ARG CODEX_VERSION=0.142.5
-ARG GEMINI_CLI_VERSION=0.41.2
-ARG INFISICAL_VERSION=0.39.0
-ARG HCLOUD_VERSION=1.64.1
+ARG NPM_VERSION=12.0.2
+ARG PNPM_VERSION=11.22.0
+ARG UV_VERSION=0.12.5
+ARG UV_SHA256=68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2
+ARG GCLOUD_VERSION=581.0.0-0
+ARG WRANGLER_VERSION=4.124.0
+ARG CLAUDE_CODE_VERSION=2.1.235
+ARG CODEX_VERSION=0.148.0
+ARG GEMINI_CLI_VERSION=0.55.1
+ARG INFISICAL_VERSION=0.43.122
+ARG HCLOUD_VERSION=1.67.0
 # SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
 # https://github.com/hetznercloud/cli/releases/download/v$HCLOUD_VERSION/checksums.txt
-ARG HCLOUD_SHA256=f6f60a929776ac300dffd42d8a8df6ac0d43d0d05e17bf6ecf6aa5b53fa364c2
-ARG SUPABASE_CLI_VERSION=2.98.2
+ARG HCLOUD_SHA256=7164483e05a1abef492768db429a28c21d579dc70e807558cb140debc2971477
+ARG SUPABASE_CLI_VERSION=2.115.0
 # SHA256 of supabase_linux_amd64.tar.gz at SUPABASE_CLI_VERSION. Source:
-# https://github.com/supabase/cli/releases/download/v$SUPABASE_CLI_VERSION/supabase_${SUPABASE_CLI_VERSION}_checksums.txt
-# (note: the checksums file name embeds the version — NOT a generic
-# checksums.txt — different from hcloud's pattern above.)
-ARG SUPABASE_CLI_SHA256=0f59df9e6837e876f309e0b4f47005133c51296e85a02727b2927f33ed9adb2d
+# https://github.com/supabase/cli/releases/download/v$SUPABASE_CLI_VERSION/checksums.txt
+# (the checksums file lists the VERSIONED asset name
+# `supabase_${SUPABASE_CLI_VERSION}_linux_amd64.tar.gz`, while the download
+# below uses the unversioned alias `supabase_linux_amd64.tar.gz`. Both point
+# at the same bytes — verified. Grep the versioned row for the hash.)
+ARG SUPABASE_CLI_SHA256=ff099608ce758b625532ef03a61f4c9520b995e94ff6cd5480dc0428cad64cb3
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -84,6 +86,18 @@ RUN mkdir -p /etc/ssh && \
       >> /etc/ssh/ssh_known_hosts
 
 # --- Node.js LTS (22) + pnpm via corepack ---
+# corepack's cache + `lastKnownGood.json` default to $HOME/.cache/node/corepack,
+# which is PER USER. `corepack prepare --activate` below runs as root, so
+# without this override the activated pin lands in /root/.cache and the `agent`
+# user (created further down, and the only user that ever runs pnpm) starts
+# with an empty cache — corepack then silently resolves `pnpm` to whatever the
+# registry says is latest, bypassing BOTH the PNPM_VERSION pin and the 7-day
+# cooldown. Observed live: image pinned 11.0.7, agent ran 11.11.0.
+# Pointing COREPACK_HOME at a shared system path makes root's activation the
+# one every user resolves. The build-time assertion after the `agent` useradd
+# proves it, so this can't regress silently again.
+ENV COREPACK_HOME=/usr/local/corepack
+
 # Manual NodeSource APT setup — inlines what `deb.nodesource.com/setup_22.x`
 # does (fetch GPG key, write keyring + sources.list, apt install). Trade-off
 # vs piping the upstream shell script: no remote code executes during build,
@@ -107,7 +121,8 @@ RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g "npm@${NPM_VERSION}" \
     && corepack enable \
-    && corepack prepare "pnpm@${PNPM_VERSION}" --activate
+    && corepack prepare "pnpm@${PNPM_VERSION}" --activate \
+    && chmod -R a+rX "${COREPACK_HOME}"
 
 # pnpm global bin dir on PATH so `pnpm add -g X` produces invokable commands.
 # pnpm 9+ installs global binaries to $PNPM_HOME/bin and errors out at
@@ -289,6 +304,14 @@ RUN userdel -r ubuntu 2>/dev/null || true \
         > /home/agent/.config/pnpm/config.yaml \
     && printf 'exclude-newer = "7 days"\n' > /home/agent/.config/uv/uv.toml \
     && chown -R agent:agent /work /home/agent
+
+# Prove the PNPM_VERSION pin actually reaches the `agent` user. corepack
+# resolves per-user by default, so a pin activated as root is easy to lose
+# (see the COREPACK_HOME comment on the Node block). Failing the build here
+# beats discovering the drift months later on a running container.
+RUN got="$(su agent -s /bin/bash -c 'pnpm --version')" \
+    && [ "$got" = "${PNPM_VERSION}" ] \
+    || { echo "PNPM pin not honored for user agent: want ${PNPM_VERSION}, got ${got}" >&2; exit 1; }
 
 # --- entrypoint + env-export sourcing for ALL shell flavors ---
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
