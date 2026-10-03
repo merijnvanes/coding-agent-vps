@@ -15,31 +15,31 @@ FROM ubuntu:24.04
 # APT pins for NodeSource, gcloud, and Infisical require the repo metadata
 # to be queryable (curl the Packages file or apt-cache madison after adding
 # the repo). The refresh procedure documents the lookup mechanics per tool.
-ARG NODEJS_VERSION=22.23.2-1nodesource1
+ARG NODEJS_VERSION=22.23.3-1nodesource1
 # npm bundled with Node 22 is 10.x, which does NOT support `min-release-age`.
 # Bump to npm 11+ so the /etc/npmrc cooldown actually applies to `npm install`.
-ARG NPM_VERSION=12.0.2
-ARG PNPM_VERSION=11.22.0
-ARG UV_VERSION=0.12.5
-ARG UV_SHA256=68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2
-ARG GCLOUD_VERSION=581.0.0-0
-ARG WRANGLER_VERSION=4.124.0
-ARG CLAUDE_CODE_VERSION=2.1.235
-ARG CODEX_VERSION=0.148.0
-ARG GEMINI_CLI_VERSION=0.55.1
-ARG INFISICAL_VERSION=0.43.122
-ARG HCLOUD_VERSION=1.67.0
+ARG NPM_VERSION=12.1.0
+ARG PNPM_VERSION=12.7.0
+ARG UV_VERSION=0.12.19
+ARG UV_SHA256=23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8
+ARG GCLOUD_VERSION=586.0.0-0
+ARG WRANGLER_VERSION=4.141.0
+ARG CLAUDE_CODE_VERSION=2.1.283
+ARG CODEX_VERSION=0.157.1
+ARG GEMINI_CLI_VERSION=0.61.0
+ARG INFISICAL_VERSION=0.43.137
+ARG HCLOUD_VERSION=1.69.0
 # SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
 # https://github.com/hetznercloud/cli/releases/download/v$HCLOUD_VERSION/checksums.txt
-ARG HCLOUD_SHA256=7164483e05a1abef492768db429a28c21d579dc70e807558cb140debc2971477
-ARG SUPABASE_CLI_VERSION=2.115.0
+ARG HCLOUD_SHA256=aca1a346c8d218a094f1811ee1705013d394cabf48e40887292caff464b64277
+ARG SUPABASE_CLI_VERSION=2.118.0
 # SHA256 of supabase_linux_amd64.tar.gz at SUPABASE_CLI_VERSION. Source:
 # https://github.com/supabase/cli/releases/download/v$SUPABASE_CLI_VERSION/checksums.txt
 # (the checksums file lists the VERSIONED asset name
 # `supabase_${SUPABASE_CLI_VERSION}_linux_amd64.tar.gz`, while the download
 # below uses the unversioned alias `supabase_linux_amd64.tar.gz`. Both point
 # at the same bytes — verified. Grep the versioned row for the hash.)
-ARG SUPABASE_CLI_SHA256=ff099608ce758b625532ef03a61f4c9520b995e94ff6cd5480dc0428cad64cb3
+ARG SUPABASE_CLI_SHA256=f6089a86fb9d9221c958193a277338daddd6822f706929943812fa32e106c86d
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -168,9 +168,8 @@ ENV PATH="/opt/agent-vps-wrappers:${PATH}"
 # YAML config. pnpm-specific supply-chain settings are therefore set below
 # in /home/agent/.config/pnpm/config.yaml.
 # This file gives `npm install` (if anyone runs it directly) the same 7-day
-# release-age guard pnpm gets via its YAML config. Requires npm 11+ (the
-# NPM_VERSION ARG pins to a 11.x build) — npm 10 silently ignores
-# min-release-age.
+# release-age guard pnpm gets via its YAML config. Requires npm 11+;
+# npm 10 silently ignores min-release-age.
 RUN cat >/etc/npmrc <<'EOF'
 min-release-age=7
 EOF
@@ -375,6 +374,14 @@ RUN printf '%s\n' \
 # command runs with the container's frozen entrypoint env. Use
 # `docker exec -it sandbox bash -lc '<cmd>'` to pick up fresh env-export
 # values, or attach to the tmux session.
+
+# Apply Ubuntu updates left behind by the base image. Keep third-party APT
+# tools at their verified versions during this upgrade.
+RUN apt-mark hold nodejs google-cloud-cli infisical \
+    && apt-get update \
+    && apt-get upgrade -y \
+    && apt-mark unhold nodejs google-cloud-cli infisical \
+    && rm -rf /var/lib/apt/lists/*
 
 USER agent
 WORKDIR /work

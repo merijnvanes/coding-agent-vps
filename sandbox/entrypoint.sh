@@ -47,9 +47,9 @@ fi
 # --- Agent Skills bridge ---
 # The skills repo (github.com/merijnvanes/skills) is a checkout under /work,
 # i.e. on the bind mount, so it survives container rebuilds and is updated by
-# a plain `git pull`. Its own README defines the canonical layout: the repo IS
-# `~/.agents/skills`, and each agent CLI needs a symlink farm because none of
-# them read `.agents/` directly yet.
+# a plain `git pull`. Current checkouts keep skills under `skills/`; older
+# checkouts keep them at the repo root. Codex reads `~/.agents/skills` directly;
+# the per-agent symlink farms also support Claude Code and Gemini.
 #
 # Doing this at every container start rather than once by hand is the whole
 # point. `~/.agents` and the per-agent symlinks live in the container's
@@ -58,7 +58,11 @@ fi
 # the next rebuild, leaving dangling symlinks behind (observed 2026-08-26:
 # five dead links, three repo skills never bridged at all). Rebuilding the
 # farm here is idempotent and picks up skills added to the repo since.
-SKILLS_SRC=/work/skills
+SKILLS_REPO=/work/skills
+SKILLS_SRC="$SKILLS_REPO"
+if [[ -d "$SKILLS_REPO/skills" ]]; then
+  SKILLS_SRC="$SKILLS_REPO/skills"
+fi
 if [[ -d "$SKILLS_SRC" ]]; then
   mkdir -p "$HOME/.agents"
   ln -sfn "$SKILLS_SRC" "$HOME/.agents/skills"
@@ -83,7 +87,7 @@ if [[ -d "$SKILLS_SRC" ]]; then
     while IFS= read -r -d '' link; do
       target="$(readlink "$link")"
       case "$target" in
-        "$SKILLS_SRC"/*|"$HOME/.agents/skills"/*)
+        "$SKILLS_REPO"/*|"$HOME/.agents/skills"/*)
           if [[ ! -e "$link" ]]; then
             rm -f "$link"
           fi
