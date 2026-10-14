@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# sandbox/wrappers/seo — PATH shim
+#
+# Wraps the real seo binary in `infisical run --` so DATAFORSEO_LOGIN and
+# DATAFORSEO_PASSWORD are fetched from the coding-agent-vps-tooling
+# Infisical project at command-invocation time. The seo CLI reads them as
+# SEO_DATAFORSEO_*; the rename happens in the child shell. See
+# sandbox/wrappers/hcloud for the full pattern + env var requirements.
+#
+# Real binary: /usr/local/pnpm/bin/seo
+
+set -euo pipefail
+
+: "${INFISICAL_TOOLING_PROJECT_ID:?INFISICAL_TOOLING_PROJECT_ID not set — host bootstrap.sh has not populated /run/agent-env/sandbox-config.sh, or this shell did not source /etc/profile.d/agent-env.sh}"
+: "${INFISICAL_ENV:=dev}"
+
+exec infisical run \
+    --projectId "$INFISICAL_TOOLING_PROJECT_ID" \
+    --env="$INFISICAL_ENV" \
+    -- sh -c 'SEO_DATAFORSEO_LOGIN="${DATAFORSEO_LOGIN:-}" SEO_DATAFORSEO_PASSWORD="${DATAFORSEO_PASSWORD:-}" exec /usr/local/pnpm/bin/seo "$@"' sh "$@"
