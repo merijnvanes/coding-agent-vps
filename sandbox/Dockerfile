@@ -27,6 +27,7 @@ ARG WRANGLER_VERSION=4.141.0
 ARG CLAUDE_CODE_VERSION=2.1.283
 ARG CODEX_VERSION=0.157.1
 ARG GEMINI_CLI_VERSION=0.61.0
+ARG SEO_CLI_VERSION=0.2.41
 ARG INFISICAL_VERSION=0.43.137
 ARG HCLOUD_VERSION=1.69.0
 # SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
@@ -267,6 +268,11 @@ RUN pnpm add -g \
       "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
       "@google/gemini-cli@${GEMINI_CLI_VERSION}"
+
+# `seo` — SEO CLI behind the seo skill (Search Console, DataForSEO). No
+# install scripts, so no --allow-build. Global, because the agent user can't
+# write the global bin dir and the skill expects `seo` on PATH.
+RUN pnpm add -g "seo@${SEO_CLI_VERSION}"
 
 # `claude-yolo` — short alias for `claude --dangerously-skip-permissions`.
 # Mirrors the laptop convenience; running YOLO mode is the intended posture
