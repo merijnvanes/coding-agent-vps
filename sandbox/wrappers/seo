@@ -4,7 +4,8 @@
 # Wraps the real seo binary in `infisical run --` so DATAFORSEO_LOGIN and
 # DATAFORSEO_PASSWORD are fetched from the coding-agent-vps-tooling
 # Infisical project at command-invocation time. The seo CLI reads them as
-# SEO_DATAFORSEO_*; the rename happens in the child shell. See
+# SEO_DATAFORSEO_*; the rename happens in the child shell. DO_NOT_TRACK
+# turns off the CLI's anonymous usage telemetry. See
 # sandbox/wrappers/hcloud for the full pattern + env var requirements.
 #
 # Real binary: /usr/local/pnpm/bin/seo
@@ -17,4 +18,4 @@ set -euo pipefail
 exec infisical run \
     --projectId "$INFISICAL_TOOLING_PROJECT_ID" \
     --env="$INFISICAL_ENV" \
-    -- sh -c 'SEO_DATAFORSEO_LOGIN="${DATAFORSEO_LOGIN:-}" SEO_DATAFORSEO_PASSWORD="${DATAFORSEO_PASSWORD:-}" exec /usr/local/pnpm/bin/seo "$@"' sh "$@"
+    -- sh -c 'DO_NOT_TRACK=1 SEO_DATAFORSEO_LOGIN="${DATAFORSEO_LOGIN:-}" SEO_DATAFORSEO_PASSWORD="${DATAFORSEO_PASSWORD:-}" exec /usr/local/pnpm/bin/seo "$@"' sh "$@"
