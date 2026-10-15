@@ -120,6 +120,9 @@ services:
       # ssh-agent socket. See daemon/ssh-agent-bridge.service for why.
       # Must match entrypoint.sh.
       SSH_AUTH_SOCK: /run/sockets/ssh-agent-bridge.sock
+      # email-meta helper (agent-home/skills/email-meta): Gmail direction/from/to/date
+      # only. The token stays with the host's emailmeta user; agents just get the socket.
+      EMAIL_META_SOCKET: /run/sockets/email-meta.sock
 
 volumes:
   sandbox-state:
