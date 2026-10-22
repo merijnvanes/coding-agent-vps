@@ -301,6 +301,34 @@ again inside the new tmux session before any cloud-CLI commands. Until
 you do, `hcloud` / `wrangler` / `gcloud` / `supabase` and any
 `infisical run --` invocation will fail with "Not logged in."
 
+The rest of the writable layer goes too. Redo `seo auth login` (night-shift
+README, setup step 2), and set `git config --global user.name` and
+`user.email` again, because `~/.gitconfig` is not in the image. Night-shift
+workers use a headless Chromium that also lives there. Reinstall it in the
+sandbox with `cd /tmp && npm i playwright@<version> && npx playwright install
+--only-shell chromium`. Then run `ldd` on the `chrome-headless-shell` binary,
+download the Ubuntu noble .debs for the libraries it cannot find, and unpack
+them with `dpkg-deb -x <deb> /tmp/libs`. Workers run it with
+`LD_LIBRARY_PATH=/tmp/libs/usr/lib/x86_64-linux-gnu` (night-shift
+`notes/dobudex-website.md`).
+
+### Host Docker and Tailscale upgrade
+
+```bash
+# On the host. Keep docker-ce-rootless-extras at the docker-ce version.
+sudo systemd-run --unit=pkg-upgrade --no-block /bin/bash -c \
+  'DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold \
+   docker-ce=<v> docker-ce-cli=<v> docker-ce-rootless-extras=<v> containerd.io=<v> \
+   docker-buildx-plugin=<v> docker-compose-plugin=<v> tailscale=<v> >/var/log/pkg-upgrade.log 2>&1'
+systemctl --user restart docker   # as dev, after the log ends: apt does not restart the rootless daemon
+```
+
+The tailscale package restarts `tailscaled`, which drops your Tailscale SSH
+session, so the apt step runs detached. The rootful `docker.service` stays
+disabled. Restarting the rootless daemon restarts the sandbox and kills tmux.
+Update the pins in `scripts/cloud-init-tasks.sh` and `cloud-init.yaml` to
+match.
+
 ### Full VPS rebuild
 
 For OS-level issues or just to test the flow end-to-end:
