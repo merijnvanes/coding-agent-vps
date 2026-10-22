@@ -50,8 +50,10 @@ for the failure mode this prevents.
 Once per container, log in to Infisical:
 
 ```bash
-infisical login    # device-code OAuth — opens a URL on the laptop, paste the code back
+infisical login --domain https://app.infisical.com/api   # --domain skips the region prompt
 ```
+
+This is a browser login with a localhost callback, not a device code. It prints `https://app.infisical.com/login?callback_port=<port>`, and the browser hands the token to `127.0.0.1:<port>` inside the container. Open the URL on the laptop with that port relayed into the container (ssh + `docker exec -i sandbox`), and the login completes by itself. Never test the callback port with curl: one bad request kills the listener. The session lasts about 10 days.
 
 Then use the CLIs normally:
 
