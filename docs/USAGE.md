@@ -24,7 +24,7 @@ is on by default).
 The sandbox container's RAM cap is **adaptive to the host size**:
 `scripts/cloud-init-tasks.sh` detects total RAM at provision time and
 sets `mem_limit = MemTotal − 1024 MB` (the 1 GB reserved for host
-services like sshd/dockerd/tailscaled, which don't scale with RAM).
+services like tailscaled/dockerd/systemd, which don't scale with RAM).
 A single Claude / Codex session typically sits at 300–700 MB resident,
 so on a default CX23 (~4 GB host → ~2.9 GB container after firmware
 reserve) you'll get 2–3 concurrent agents comfortably; CX33 (~8 GB →
@@ -438,6 +438,47 @@ To confirm: open https://login.tailscale.com/admin/machines. If the
 VPS isn't listed at all, the join was rejected (silent failure — no
 "pending approval" entry). Fix the ACL, regenerate a tagged auth-key,
 `hcloud server delete coding-agent-vps`, re-run `provision.sh`.
+
+### Locked out: Tailscale SSH does not answer
+
+Host OpenSSH is masked and root has no password (see
+[ARCHITECTURE.md "Firewall & IPv6"](./ARCHITECTURE.md#firewall--ipv6)),
+so Tailscale is the only network login. When it is down, use the
+Hetzner web console. It is out-of-band and opens no port.
+
+1. Check the tailnet side first: is the VPS online at
+   https://login.tailscale.com/admin/machines, and does the policy
+   still allow your login in its `ssh` rules?
+2. Set a root password and log in on the console:
+   ```bash
+   hcloud context use coding-agent-vps-admin       # the VPS's own project; the hcloud steps below need it
+   hcloud server reset-password coding-agent-vps   # prints a new root password
+   ```
+   Open the server in the Hetzner Cloud Console and click **Console**.
+   Log in as `root` and repair tailscaled
+   (`systemctl status tailscaled`, `journalctl -u tailscaled`).
+   `reset-password` goes through qemu-guest-agent, which Hetzner's
+   Ubuntu image runs.
+3. Lock the password again before you log out: `passwd -l root`.
+4. If `reset-password` fails, boot the rescue system:
+   `hcloud server enable-rescue coding-agent-vps` (prints a rescue
+   root password), then `hcloud server reboot coding-agent-vps`. Log
+   in on the web console, because the deny-all firewall blocks SSH to
+   the rescue system too. Mount the disk (`mount /dev/sda1 /mnt`),
+   repair, and reboot. Rescue mode lasts for one boot only.
+5. If none of this is worth it, rebuild with `./scripts/provision.sh`.
+
+Do not unmask `ssh.socket` as a workaround. The sandbox reaches host
+port 22 over loopback, past both firewalls.
+
+A VPS provisioned before OpenSSH was masked gets the change by pulling
+and re-running the idempotent setup script (it rebuilds the image from
+cache and leaves running units alone):
+
+```bash
+sudo git -C /opt/agent-vps pull
+sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
+```
 
 ### `bootstrap.sh` fails with HTTP 422 from Infisical
 

@@ -107,9 +107,13 @@ on each block:
    is: deny-all inbound at the firewall, and an authenticated overlay
    network the user's laptop joins. The current Tailscale-specific
    parts: `cloud-init.yaml` (install + `tailscale up --ssh`), ACL
-   instructions in this guide (Phase 3 below). Tailscale SSH is
-   nice-to-have but not load-bearing — you can fall back to standard
-   SSH + Tailscale-only port exposure.
+   instructions in this guide (Phase 3 below). Tailscale SSH is the
+   login path: `scripts/cloud-init-tasks.sh` step 2b masks host
+   OpenSSH, because the sandbox reaches host ports over loopback past
+   the firewalls. With another overlay, drop that mask and keep its
+   `sshd_config.d` drop-in (keys only, no root). The sandbox can
+   still reach that sshd over loopback on any address it binds, so
+   key-only login is then the control that holds.
 
 4. **Git host** — only relevant if the user's repos are on something
    other than GitHub (e.g. GitLab, Codeberg, Forgejo, Bitbucket).

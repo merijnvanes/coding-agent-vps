@@ -8,6 +8,8 @@
 #   1. Configure host memory: 2 GB swapfile + vm.swappiness=10;
 #      enable persistent journald so post-incident logs survive reboot
 #   2. Create creds + dev users
+#   2b. Turn host OpenSSH off and lock root's password (Tailscale SSH
+#       is the only way in)
 #   3. Pre-create the on-disk directory tree with correct ownership/modes
 #   4. Configure subuid/subgid for dev (default range only — the
 #      previous agent-sockets-group + custom subgid trick was dropped in
@@ -40,7 +42,7 @@ log "starting host setup"
 # in-container process, not the host.
 #
 # Container sizing is adaptive: we detect host RAM and reserve a fixed
-# 1 GB for host processes (sshd, dockerd-rootless, tailscaled, etc. —
+# 1 GB for host processes (tailscaled, dockerd-rootless, systemd, etc. —
 # these don't grow with available RAM). The remainder is the container's
 # RAM cap, and MemoryHigh on the slice is set to 90% of that for the
 # soft-throttle warning window. Swap stays a constant 2 GB regardless
@@ -175,6 +177,62 @@ id -u dev >/dev/null 2>&1 \
 
 # Passwordless sudo for dev (Tailscale SSH is the auth gate)
 install -m 0440 /dev/stdin /etc/sudoers.d/dev <<<'dev ALL=(ALL) NOPASSWD:ALL'
+
+# === 2b. Host OpenSSH off ===
+#
+# Tailscale SSH (`tailscale up --ssh` in cloud-init.yaml) runs inside
+# tailscaled and is the only way in. The Ubuntu image still ships
+# OpenSSH, socket-activated on 0.0.0.0:22 and [::]:22, and Hetzner
+# gives root a password when the server is created without an SSH key,
+# which provision.sh does. The Hetzner firewall and ufw block that port
+# from the internet, but the sandbox reaches the host's own addresses
+# (public IP, tailnet IP) over loopback, and ufw accepts loopback. So
+# with sshd up, a compromised agent could guess root passwords from
+# inside the box.
+#
+# - mask ssh.socket and ssh.service, so socket activation, an apt
+#   postinst or a stray `systemctl start` cannot bring sshd back
+# - a drop-in that forbids password and root login, in case someone
+#   unmasks it. 10- sorts before cloud-init's 50-cloud-init.conf, and
+#   sshd keeps the first value it reads, so this one wins.
+# - lock root's password. Break-glass is `hcloud server reset-password`
+#   plus the Hetzner web console, or rescue mode (docs/USAGE.md
+#   "Locked out").
+#
+# The openssh-server package stays installed: removing it would run
+# package scripts on a live host for no gain over masking.
+if command -v sshd >/dev/null 2>&1; then
+  install -d -m 0755 /etc/ssh/sshd_config.d
+  install -m 0644 /dev/stdin /etc/ssh/sshd_config.d/10-coding-agent-vps.conf <<'EOF'
+# Written by scripts/cloud-init-tasks.sh step 2b. sshd is masked;
+# Tailscale SSH is the access path. This holds if it is ever unmasked.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+  # Assert that sshd reads the drop-in, so a reordered include or a
+  # stray earlier file cannot turn it into a silent no-op. `sshd -T`
+  # refuses to run without its privilege separation dir, which only the
+  # (now masked) unit creates, so a re-run after a reboot needs it here.
+  install -d -m 0755 /run/sshd
+  sshd_effective=$(sshd -T 2>/dev/null || true)
+  if ! grep -qx 'passwordauthentication no' <<<"$sshd_effective" \
+     || ! grep -qx 'permitrootlogin no' <<<"$sshd_effective"; then
+    log "ERROR: sshd does not apply /etc/ssh/sshd_config.d/10-coding-agent-vps.conf (check: sudo sshd -T)"
+    exit 1
+  fi
+fi
+systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
+systemctl mask ssh.socket ssh.service
+passwd -l root >/dev/null
+# Nothing on the host may listen on TCP 22. Tailscale SSH does not show
+# up here: tailscaled takes port 22 traffic off tailscale0 itself.
+if [[ -n $(ss -Hltn 'sport = :22') ]]; then
+  log "ERROR: something still listens on TCP 22 after masking OpenSSH:"
+  ss -Hltnp 'sport = :22' >&2
+  exit 1
+fi
+log "host OpenSSH masked, root password locked"
 
 # === 3. Directory tree ===
 

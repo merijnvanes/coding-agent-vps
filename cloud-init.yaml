@@ -22,6 +22,11 @@
 package_update: true
 package_upgrade: true
 
+# No SSH password login, from the first boot. Host OpenSSH gets masked
+# by scripts/cloud-init-tasks.sh step 2b anyway; Tailscale SSH is the
+# only way in. This closes the window before that step runs.
+ssh_pwauth: false
+
 packages:
   - bash
   - ca-certificates
@@ -29,6 +34,8 @@ packages:
   - git
   - jq
   - openssh-client
+  # Installed but masked by scripts/cloud-init-tasks.sh step 2b: nothing
+  # listens on port 22. Tailscale SSH serves logins.
   - openssh-server
   - openssl
   # slirp4netns: required by rootless Docker for user-mode networking.

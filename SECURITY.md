@@ -37,6 +37,10 @@ the canonical version. Briefly:
 - An attacker on the public internet cannot reach the VPS over any
   port (deny-all Hetzner Cloud firewall + UFW; only Tailscale's
   outbound-initiated tunnel is open).
+- A compromised agent cannot log in to the host over SSH. Host
+  OpenSSH is masked and root's password is locked; Tailscale SSH is
+  the only login path. This matters because the sandbox reaches the
+  host's own addresses over loopback, past both firewalls.
 
 **Out of scope / explicit residuals**:
 - A compromised agent **can** exfiltrate any credential the cred-

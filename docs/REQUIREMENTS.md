@@ -93,6 +93,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 - **MUST** — VPS firewall blocks all incoming ports from the public internet. Only Tailscale traffic is permitted in. SSH, any agent endpoints, anything else are reachable only via tailnet.
 - **MUST** — Tailscale ACL is deny-by-default: only my own tailnet nodes can reach the VPS.
 - **MUST** — Firewall layers deny all IPv6 inbound, matching the IPv4 deny-all rules. IPv6 itself stays enabled on the VPS (kernel and interface level) — kernel-level disable was rejected because it causes silent failures for any service that binds to `::` and breaks IPv6-preferring DNS fallback for package mirrors. The security property we care about ("no public ingress") is enforced at the firewall, not at the network stack.
+- **MUST** — No SSH daemon listens on the host. Tailscale SSH is the only login path, and root has no password. The sandbox reaches the host's own addresses over loopback, past every firewall layer, so a host sshd would hand a compromised agent a root password-guessing target.
 - **MUST** — Tailscale ACL also denies VPS → laptop traffic. The compromised-VPS scenario cannot initiate connections to laptop tailnet services. (Laptop-initiated SSH to the VPS is connection-tracked and unaffected.)
 
 **Egress (outgoing):**
