@@ -294,7 +294,15 @@ docker inspect sandbox --format '{{.HostConfig.Memory}} {{.HostConfig.CgroupPare
 # all descendants of the slice, including the container's cgroup)
 cat /sys/fs/cgroup/user.slice/user-$(id -u dev).slice/user@$(id -u dev).service/sandbox.slice/memory.swap.max
 # expect: 0
+
+# Process/thread cap (pids_limit in docker-compose.yml)
+docker exec sandbox cat /sys/fs/cgroup/pids.max
+# expect: 4096
 ```
+
+To change only the process cap without recreating the container (which
+would kill tmux), apply the compose value in place:
+`docker update --pids-limit 4096 sandbox`.
 
 The `infisical login` session does NOT persist across rebuilds (no
 named volume — intentional, the sandbox holds no long-lived secret
@@ -343,14 +351,17 @@ sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 
 The script leaves services that already run alone, so a change to
 `daemon/ssh-agent-creds.service` or `daemon/ssh-agent-bridge.service`
-takes effect only after a restart. Restarting the agent empties it, so
-reload the GitHub key straight after:
+takes effect only after a restart. The agent loads the cached GitHub
+key itself when it starts:
 
 ```bash
 sudo systemctl restart ssh-agent-creds.service ssh-agent-bridge.service
-sudo systemctl start cred-daemon.service    # loads github-ssh-key into the fresh agent
 docker exec sandbox ssh -T git@github.com   # as dev: expect "Hi <github-username>!"
 ```
+
+If that says "Permission denied (publickey)", the cached key is
+missing or stale: `sudo systemctl start cred-daemon.service` fetches
+it from Infisical and loads it.
 
 ### Full VPS rebuild
 

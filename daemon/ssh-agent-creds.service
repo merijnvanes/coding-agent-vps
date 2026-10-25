@@ -32,7 +32,22 @@ ExecStartPre=/usr/bin/rm -f /var/lib/agent-vps/sockets/ssh-agent.sock
 # creds. We only ever load a plain key file, so refuse every provider.
 ExecStart=/usr/bin/ssh-agent -P "" -a /var/lib/agent-vps/sockets/ssh-agent.sock
 ExecStartPost=/bin/chmod 0666 /var/lib/agent-vps/sockets/ssh-agent.sock
+# Load the cached GitHub key on every start (boot, restart, recovery
+# after an OOM kill), so a fresh agent is never left empty until the next
+# cred-daemon run. "-": the file does not exist before bootstrap.sh;
+# cred-daemon still owns fetching and swapping the key.
+ExecStartPost=-/usr/bin/env SSH_AUTH_SOCK=/var/lib/agent-vps/sockets/ssh-agent.sock /usr/bin/ssh-add -q /var/lib/agent-vps/creds/github-ssh-key
 KillMode=mixed
+Restart=on-failure
+RestartSec=2
+# The sandbox can add keys of its own through the bridge, and ssh-agent
+# has no cap on how many it holds. Bound what that can cost the host,
+# swap included (this unit sits outside sandbox.slice). One key needs a
+# few MB; ssh-agent is a single process. If the cap is hit, the OOM kill
+# restarts the agent with the cached key.
+TasksMax=16
+MemoryMax=64M
+MemorySwapMax=0
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict

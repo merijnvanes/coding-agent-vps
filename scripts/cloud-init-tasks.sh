@@ -342,17 +342,28 @@ sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
 sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
   bash -lc 'systemctl --user enable --now docker'
 
-# Assert the cgroup memory controller is delegated to dev's user slice.
-# Without this, `mem_limit` in docker-compose.yml is silently a no-op
-# and the page-cache-thrashing failure mode (see step 1 rationale)
-# returns. Ubuntu noble's stock systemd delegates `memory pids cpu`,
-# but we don't want to rely on the distro default — fail loudly here
-# rather than discover it during the next incident.
+# Assert the cgroup memory and pids controllers are delegated to dev's
+# user manager, the cgroup rootless dockerd and its containers live
+# under. Without them, `mem_limit` / `pids_limit` in docker-compose.yml
+# are silently no-ops and the page-cache-thrashing failure mode (see
+# step 1 rationale) returns. Ubuntu noble's stock systemd delegates
+# `memory pids cpu`, but we don't want to rely on the distro default —
+# fail loudly here rather than discover it during the next incident.
+# Rootless Docker also applies limits only with the systemd cgroup
+# driver.
 DEV_UID=$(id -u dev)
-DELEGATED=$(cat "/sys/fs/cgroup/user.slice/user-${DEV_UID}.slice/cgroup.controllers" 2>/dev/null || echo "")
-if ! grep -qw memory <<<"$DELEGATED"; then
-  log "ERROR: memory cgroup controller not delegated to dev (got: '${DELEGATED}')"
-  log "       docker-compose.yml mem_limit would be silently ignored — aborting"
+DELEGATED_PATH="/sys/fs/cgroup/user.slice/user-${DEV_UID}.slice/user@${DEV_UID}.service/cgroup.controllers"
+DELEGATED=$(cat "$DELEGATED_PATH" 2>/dev/null || echo "")
+for ctrl in memory pids; do
+  if ! grep -qw "$ctrl" <<<"$DELEGATED"; then
+    log "ERROR: $ctrl cgroup controller not delegated to dev's user manager (${DELEGATED_PATH}: '${DELEGATED}')"
+    log "       docker-compose.yml resource limits would be silently ignored — aborting"
+    exit 1
+  fi
+done
+CGROUP_DRIVER=$(sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID docker info --format '{{.CgroupDriver}}')
+if [[ $CGROUP_DRIVER != systemd ]]; then
+  log "ERROR: rootless Docker uses cgroup driver '${CGROUP_DRIVER}', not systemd — container limits would be ignored; aborting"
   exit 1
 fi
 
@@ -431,6 +442,18 @@ if sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID docker inspect sandbox >/de
   else
     log "  (memory-swap update declined — relying on slice MemorySwapMax=0, which is the actual enforcement)"
   fi
+  # Process cap: read pids_limit from docker-compose.yml (single source
+  # of truth) and apply it in place, then check the kernel took it.
+  PIDS_LIMIT=$(sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID \
+    bash -lc 'cd /opt/agent-vps && docker compose config --format json' | jq -r '.services.sandbox.pids_limit')
+  if [[ $PIDS_LIMIT =~ ^[0-9]+$ ]] \
+     && sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID \
+          docker update --pids-limit "$PIDS_LIMIT" sandbox >/dev/null \
+     && [[ $(sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$DEV_UID docker exec sandbox cat /sys/fs/cgroup/pids.max) == "$PIDS_LIMIT" ]]; then
+    log "  docker update --pids-limit ${PIDS_LIMIT}: OK (pids.max verified)"
+  else
+    log "  WARN: pids limit not applied (compose value '${PIDS_LIMIT}'); run \`docker compose up -d --force-recreate sandbox\` manually"
+  fi
 else
   log "sandbox container not yet created — limits will apply on next \`docker compose up -d\`"
 fi
@@ -468,10 +491,9 @@ systemctl daemon-reload
 # instance keeps the OLD runtime behavior until manually restarted.
 # Service-file changes that need to take effect immediately require:
 #   sudo systemctl restart ssh-agent-creds.service ssh-agent-bridge.service
-#   sudo systemctl start cred-daemon.service   # reload the key into the fresh agent
-# (docs/USAGE.md "Update an existing VPS from the repo"). Acceptable
-# trade because restart clears any ssh-agent keys cred-daemon had
-# loaded — forcing it silently on every script re-run is worse.
+# (docs/USAGE.md "Update an existing VPS from the repo"). The agent
+# reloads the cached key on start, but a restart still drops anything
+# else in flight — forcing it silently on every script re-run is worse.
 #
 # Ordering matters: ssh-agent-creds first (the bridge's socat connects
 # to its socket), bridge second, timer last. cred-daemon.service itself

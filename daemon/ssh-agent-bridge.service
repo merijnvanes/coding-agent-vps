@@ -30,10 +30,21 @@ ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
 # pre-existing socket file; `reuseaddr` only covers TCP-style SO_REUSEADDR,
 # not Unix-socket path cleanup). Safe — each ExecStart creates a fresh socket.
 ExecStartPre=/usr/bin/rm -f /var/lib/agent-vps/sockets/ssh-agent-bridge.sock
-ExecStart=/usr/bin/socat UNIX-LISTEN:/var/lib/agent-vps/sockets/ssh-agent-bridge.sock,fork,reuseaddr,mode=0666 UNIX-CONNECT:/var/lib/agent-vps/sockets/ssh-agent.sock
+# max-children: socat forks one child per connection, and those children
+# run here, outside the sandbox's memory and pids limits. Without a cap
+# the sandbox could open thousands of connections and spend host memory
+# as creds. At the cap socat stops accepting until a child exits; extra
+# connections wait in the listen backlog. Git needs one or two at a time.
+ExecStart=/usr/bin/socat UNIX-LISTEN:/var/lib/agent-vps/sockets/ssh-agent-bridge.sock,fork,max-children=32,reuseaddr,mode=0666 UNIX-CONNECT:/var/lib/agent-vps/sockets/ssh-agent.sock
 KillMode=mixed
 Restart=on-failure
 RestartSec=2
+# Backstops for max-children: the parent plus 32 children fit well inside
+# both, at about 1-2 MB each. No swap, so the cap cannot spill into the
+# host's swap reserve (this unit sits outside sandbox.slice).
+TasksMax=64
+MemoryMax=128M
+MemorySwapMax=0
 # Hardening
 NoNewPrivileges=true
 ProtectSystem=strict

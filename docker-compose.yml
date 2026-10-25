@@ -67,6 +67,14 @@ services:
     mem_limit: ${SANDBOX_MEM_LIMIT:-3g}
     cgroup_parent: sandbox.slice
 
+    # Process + thread cap (cgroup pids.max). Bounds a fork bomb or a
+    # runaway build to the container; without it the container shares
+    # dev's user-slice task budget with the host-side dev sessions and
+    # rootless dockerd. Threads count too: a few agents, builds and a
+    # headless Chromium stay in the hundreds. cloud-init-tasks.sh asserts
+    # the pids controller is delegated, so this is not a silent no-op.
+    pids_limit: 4096
+
     # Host-loopback dev-server ports — reachable ONLY via SSH port forwarding
     # from the laptop:
     #     ssh -L 3000:127.0.0.1:3000 dev@coding-agent-vps
