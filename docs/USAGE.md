@@ -431,12 +431,12 @@ mode anyway, the offender is probably *outside* the sandbox: check
 Cloud-init's `tailscale up` was rejected. Two common causes:
 
 1. **`tagOwners` missing** for `tag:coding-agent-vps` in your
-   Tailscale ACL (see [SETUP.md Phase 3](./SETUP.md#phase-3-tailscale-5-min)).
+   Tailscale policy (see [SETUP.md Phase 3](./SETUP.md#phase-3-tailscale-5-min)).
 2. **Auth-key generated without the tag** ticked.
 
 To confirm: open https://login.tailscale.com/admin/machines. If the
 VPS isn't listed at all, the join was rejected (silent failure — no
-"pending approval" entry). Fix the ACL, regenerate a tagged auth-key,
+"pending approval" entry). Fix the policy, regenerate a tagged auth-key,
 `hcloud server delete coding-agent-vps`, re-run `provision.sh`.
 
 ### Locked out: Tailscale SSH does not answer

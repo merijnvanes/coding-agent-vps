@@ -30,7 +30,10 @@ the canonical version. Briefly:
   material from the credential daemon's files (they live in a
   separate trust zone the sandbox doesn't mount).
 - A compromised agent cannot reach the laptop or other devices on
-  the user's tailnet (Tailscale ACL: VPS→laptop is denied).
+  the user's tailnet (the Tailscale policy grants the VPS tag
+  nothing; see [docs/SETUP.md Phase 3](./docs/SETUP.md#phase-3-tailscale-5-min).
+  A policy with no `grants` or `acls` section is allow-all, so this
+  holds only with the template's grant in place).
 - A compromised agent cannot access or destroy its own VPS (the
   Hetzner admin token lives only on the laptop; the agent's apps-
   scope token is scoped to a different Hetzner project).

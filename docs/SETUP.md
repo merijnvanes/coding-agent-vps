@@ -42,7 +42,7 @@ This repo is a template. The default implementation uses:
 |---|---|---|
 | Cloud VPS | Hetzner Cloud | `scripts/provision.sh`, parts of `cloud-init.yaml` |
 | Secret store | Infisical | `daemon/cred-daemon.sh` (auth + fetch), `scripts/bootstrap.sh` (prompts) |
-| Network + SSH | Tailscale | `cloud-init.yaml` (install + `tailscale up`), Tailscale ACL config |
+| Network + SSH | Tailscale | `cloud-init.yaml` (install + `tailscale up`), Tailscale policy file |
 | Git host | GitHub | `scripts/provision.sh` (deploy key API), `cloud-init.yaml` (clone URL), GitHub SSH host-key pinning |
 | Alerts | ntfy | `alerts/ntfy.sh` |
 
@@ -106,7 +106,7 @@ on each block:
    self-hosted, Cloudflare Zero Trust, Twingate). The required shape
    is: deny-all inbound at the firewall, and an authenticated overlay
    network the user's laptop joins. The current Tailscale-specific
-   parts: `cloud-init.yaml` (install + `tailscale up --ssh`), ACL
+   parts: `cloud-init.yaml` (install + `tailscale up --ssh`), policy
    instructions in this guide (Phase 3 below). Tailscale SSH is the
    login path: `scripts/cloud-init-tasks.sh` step 2b masks host
    OpenSSH, because the sandbox reaches host ports over loopback past
@@ -476,58 +476,74 @@ Phase 6 and when the user does `infisical login` in Phase 7.
 
 ## Phase 3: Tailscale (~5 min)
 
-**Goal.** Configure the user's Tailscale ACL so the VPS can join the
-tailnet under `tag:coding-agent-vps`, the user's laptop can SSH into
-it as the chosen user, and — implicitly or explicitly — the VPS
-cannot initiate connections back to the laptop or other tailnet
-devices. Plus generate an auth-key with the tag ticked.
+**Goal.** Set the user's Tailscale policy so the VPS can join the
+tailnet under `tag:coding-agent-vps`, the user's own devices can SSH
+into it as the chosen user, and the VPS cannot open a connection to
+the laptop or any other tailnet device. Then generate an auth-key
+with the tag ticked.
 
 The asymmetric reachability bounds the agent's blast radius — a
 compromised sandbox cannot pivot to the user's laptop or other
 tailnet devices.
 
-### Background: how Tailscale enforces the asymmetry
+### Background: how the Tailscale policy enforces the asymmetry
 
-Tailscale ACLs have two independent gates:
+The policy file has separate sections, and Tailscale SSH needs two of
+them:
 
-- The **`ssh` block** controls Tailscale SSH (`tailscale up --ssh` on
-  the destination, plus `ssh <user>@host` from the source). The VPS
-  is provisioned with `--ssh` enabled, so all our SSH usage routes
-  through Tailscale SSH — not raw TCP.
-- The **`acls` block** controls raw TCP/UDP between devices (e.g.,
-  `curl http://hostname:8080/`). Our setup doesn't need any of this
-  — every interaction with the VPS goes through the SSH tunnel.
+- **`grants`** (or the older **`acls`**) allow network traffic between
+  devices. Tailscale SSH is traffic to port 22, so the user's devices
+  need a grant to the VPS.
+- **`ssh`** says which source may log in as which user over Tailscale
+  SSH. The VPS runs `tailscale up --ssh` and host OpenSSH is masked,
+  so this is the only login path.
+- **`tests`** (network) and **`sshTests`** (SSH logins) are
+  assertions that Tailscale checks on every save. It rejects a save
+  that breaks one.
 
-A Tailscale ACL file with **no `acls` block** denies ALL inter-device
-network traffic. That's the strictest possible setting for the
-asymmetry we want — and it's perfectly compatible with Tailscale SSH
-via the `ssh` block. Most users land here naturally.
+A policy with **no `grants` and no `acls` section allows all
+traffic** between all devices: Tailscale applies its default
+allow-all policy. So a policy with only `ssh` rules lets the VPS
+reach the laptop on every port. The first grant switches the whole
+tailnet to deny-by-default, and from then on only granted traffic
+flows. That applies to every device, so the grant below must also
+cover what the user's other devices need from each other.
 
-If the ACL DOES have an `acls` block (custom tailnet, or you want raw
-TCP for some reason), make sure no rule has the VPS as a source.
+Connections are stateful. A grant from the laptop to the VPS lets the
+replies come back, but it does not let the VPS start a connection to
+the laptop.
+
+The template names the user's **login** (the email shown at
+https://login.tailscale.com/admin/users), not an autogroup:
+
+- A login matches all of that person's devices: laptop, phone,
+  tablet. A tagged device has no user, so the login never matches the
+  VPS.
+- `autogroup:member` matches every user in the tailnet, including
+  anyone invited later.
+- `autogroup:admin` matches users whose role is Admin. The tailnet
+  Owner has the Owner role (`autogroup:owner`), so on a one-person
+  tailnet `autogroup:admin` can match nobody.
 
 ### Manual steps (have the user do these)
 
-Open https://login.tailscale.com/admin/acls/file. The user's existing
-ACL is one of three shapes:
+Open https://login.tailscale.com/admin/acls/file. Look for the parts
+that would let the VPS reach other devices:
 
-1. **Default Tailscale ACL** (new tailnets): a catch-all
-   `{"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]}`.
-   This MUST go (or be narrowed) — the catch-all would let VPS→laptop
-   traffic flow. The simplest replacement is to drop the `acls`
-   section entirely and rely on Tailscale SSH (block below).
-2. **Customized ACL** without an `acls` section: rely on Tailscale
-   SSH for our access (no `acls` changes needed — see the optional
-   block below).
-3. **Customized ACL** with an `acls` block: confirm no rule has
-   `src: ["*"]`, `src: ["tag:coding-agent-vps"]`, or
-   `src: ["autogroup:tagged"]` (which matches every tagged device,
-   including this one). Any of those would let VPS→laptop traffic
-   flow and defeat the asymmetry.
+1. **Default policy** of a new tailnet: an allow-all rule, either
+   `"grants": [{"src": ["*"], "dst": ["*"], "ip": ["*"]}]` or
+   `"acls": [{"action": "accept", "src": ["*"], "dst": ["*:*"]}]`.
+   Remove it. The grant below replaces it.
+2. **No `grants` and no `acls` section**, for example only `ssh`
+   rules: this is allow-all too. Add the grant below.
+3. **Custom `grants` or `acls`**: remove or narrow every rule whose
+   `src` can match the VPS: `*`, `tag:coding-agent-vps`,
+   `autogroup:tagged` (every tagged device), or an IP range that
+   covers the VPS. Keep the rest.
 
-Have the user MERGE the following blocks into their existing ACL —
-**add sibling keys, don't overwrite** existing `tagOwners`/`ssh`/`acls`
-entries that govern their other tailnet devices:
+Have the user MERGE the following blocks into their existing policy.
+**Add to the existing `tagOwners`/`grants`/`ssh`/`tests`/`sshTests`
+sections; do not overwrite** entries that govern their other devices:
 
 ```jsonc
 {
@@ -536,34 +552,52 @@ entries that govern their other tailnet devices:
     "tag:coding-agent-vps": ["autogroup:admin"]
   },
 
-  // Required: Tailscale SSH access — only as the chosen username,
-  // no `autogroup:nonroot` (Tailscale's own docs warn that pairing
-  // it with a tagged dst lets the source SSH as ANY non-root user).
+  // Required: the user's own devices may reach every device, the VPS
+  // included (Tailscale SSH needs port 22). No grant has the VPS tag
+  // as src, so the VPS cannot start a connection to anything.
+  "grants": [
+    {"src": ["<OWNER-LOGIN>"], "dst": ["*"], "ip": ["*"]}
+  ],
+
+  // Required: Tailscale SSH, only from the user's devices and only as
+  // the chosen username. No `autogroup:nonroot`: with a tagged dst it
+  // allows SSH as ANY non-root user.
   "ssh": [
     {
       "action": "accept",
-      "src":    ["autogroup:member"],
+      "src":    ["<OWNER-LOGIN>"],
       "dst":    ["tag:coding-agent-vps"],
       "users":  ["<USER>"]
     }
-  ]
+  ],
 
-  // Optional — only needed if the user wants raw TCP/UDP from
-  // laptop to VPS (port-forwarded services beyond SSH, e.g. a dev
-  // server on coding-agent-vps:8000). Without this, only Tailscale
-  // SSH works — which covers the documented setup steps.
-  // ,
-  // "acls": [
-  //   {
-  //     "action": "accept",
-  //     "src":    ["autogroup:member"],
-  //     "dst":    ["tag:coding-agent-vps:*"]
-  //   }
-  // ]
+  // Required: network tests, checked on every save. An edit that lets
+  // the VPS reach the laptop, or cuts the user's network path to VPS
+  // port 22, is rejected.
+  "tests": [
+    {"src": "tag:coding-agent-vps", "deny": ["<LAPTOP-TAILNET-IP>:22", "<LAPTOP-TAILNET-IP>:443"]},
+    {"src": "<OWNER-LOGIN>", "accept": ["tag:coding-agent-vps:22"]}
+  ],
+
+  // Required: SSH tests, also checked on every save. `tests` cannot
+  // see the `ssh` rules, so this one catches an edit that removes the
+  // user's login or opens root.
+  "sshTests": [
+    {"src": "<OWNER-LOGIN>", "dst": ["tag:coding-agent-vps"], "accept": ["<USER>"], "deny": ["root"]}
+  ]
 }
 ```
 
-(Substitute `<USER>` with the username chosen earlier.)
+Substitute:
+
+- `<OWNER-LOGIN>`: the user's Tailscale login email.
+- `<USER>`: the username chosen earlier.
+- `<LAPTOP-TAILNET-IP>`: the laptop's address, from `tailscale ip -4`
+  on the laptop. Add deny entries for ports the laptop serves (local
+  dev servers, databases).
+
+If other people share the tailnet, give each person their own grant
+for what they need. Never give the VPS tag a grant.
 
 > **Critical — this is the single most-missed step:** when generating
 > the auth-key in the next step, the user MUST tick
@@ -582,8 +616,11 @@ entries that govern their other tailnet devices:
 
 ### Verify
 
-Confirm with the user that the ACL is saved (Tailscale validates
-syntax on save). Real join verification happens in Phase 5.
+Confirm with the user that the policy saved. Tailscale checks the
+syntax and the `tests` block on save. Then have them open **Preview
+rules** on the same page and pick `tag:coding-agent-vps`: it must say
+the tag cannot access any ports. The join is verified in Phase 5, and
+the reachability check runs in Phase 7, once the sandbox exists.
 
 ## Phase 4: GitHub SSH key (~3 min)
 
@@ -752,7 +789,7 @@ The user lands inside the sandbox's tmux session.
 claude login        # prints a URL; user opens it on their laptop, completes OAuth, pastes the code back
 codex login         # same flow
 gemini             # first run prompts for OAuth via Google sign-in (browser on the laptop)
-infisical login     # device-code flow — gives the sandbox access to coding-agent-vps-tooling + per-app projects
+infisical login     # browser login with a localhost callback (USAGE.md "Using the sandbox cloud CLIs") — gives the sandbox access to coding-agent-vps-tooling + per-app projects
 ```
 
 All four OAuth flows are interactive and require browser access on the
@@ -777,6 +814,57 @@ hcloud server list            # via PATH shim — fetches HCLOUD_TOKEN from codi
 ```
 
 All four should succeed. If `ssh -T` fails with "Permission denied (publickey)": the cred-daemon may not have loaded the key. Check `sudo systemctl status ssh-agent-creds.service` and `sudo systemctl status cred-daemon.service` on the VPS. If `hcloud server list` fails with an Infisical auth error: confirm `infisical login` completed and the user has access to `coding-agent-vps-tooling`.
+
+### Verify the VPS cannot reach the laptop
+
+This proves the Phase 3 policy in practice. First confirm the laptop
+accepts incoming tailnet connections at all, or the test passes
+whatever the policy says:
+
+```bash
+tailscale debug prefs | grep ShieldsUp    # must be "ShieldsUp": false
+```
+
+If it is `true`, switch "Allow incoming connections" on in the
+Tailscale menu for the test, and off again afterwards. Then have the
+user start a listener on the laptop, in a second terminal:
+
+```bash
+nc -lk 47777        # listens on every laptop interface, the tailnet one too; prints what it receives
+```
+
+Then, from the laptop (substitute `<LAPTOP-TAILNET-IP>` from Phase 3).
+Each probe sends a marker line, so the listener shows who got
+through:
+
+```bash
+# Control: the listener must print "control"
+echo control | nc -w 2 <LAPTOP-TAILNET-IP> 47777
+# From the VPS host
+ssh <USER>@coding-agent-vps \
+  'timeout 5 bash -c "exec 3<>/dev/tcp/<LAPTOP-TAILNET-IP>/47777 && echo from-host >&3"; echo "exit $?"'
+# From inside the sandbox
+ssh <USER>@coding-agent-vps \
+  'docker exec sandbox timeout 5 bash -c "exec 3<>/dev/tcp/<LAPTOP-TAILNET-IP>/47777 && echo from-sandbox >&3"; echo "exit $?"'
+```
+
+Read the exit codes:
+
+- `exit 124` from both probes is the pass. Tailscale drops the
+  packets, so the connect times out, and the listener prints only
+  `control`.
+- `exit 0` means the VPS reached the laptop, and the listener prints
+  `from-host` or `from-sandbox`.
+  Some grant or `acls` rule matches the VPS, or the policy has neither
+  section and is allow-all: go back to Phase 3.
+- Any other exit code is inconclusive, not a pass. `exit 1` is
+  usually "connection refused", which means the packet did reach the
+  laptop. From the sandbox it can also mean the container is not
+  running. Fix the cause and rerun.
+
+The laptop's own firewall in stealth mode also drops packets, so it
+can produce a false `exit 124`. Turn it off for the test, or allow
+`nc`. Stop the listener with Ctrl-C afterwards.
 
 ## Wrap-up
 

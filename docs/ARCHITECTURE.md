@@ -92,7 +92,7 @@ Three zones on the VPS, three trust levels.
 
 | Component | Zone | Role |
 |---|---|---|
-| Tailscale daemon | host | Ingress (Tailscale-only, deny-all ACL) + outbound mesh |
+| Tailscale daemon | host | Ingress (Tailscale-only; the policy grants the VPS tag nothing) + outbound mesh + Tailscale SSH |
 | Docker engine | host | Container runtime, configured for rootless |
 | cred-daemon | creds | Fetches host-side credentials (`github-ssh-key`, `ntfy-topic`) from the `coding-agent-vps` Infisical project. Runs at host boot, daily via systemd timer, and on manual `systemctl start`. Loads `github-ssh-key` into ssh-agent and writes `ntfy-topic` for the alert script. Alerts on failure. |
 | ssh-agent | creds | Signs git/ssh challenges originating in sandbox (true signing oracle — private key never leaves creds zone) |
@@ -106,7 +106,7 @@ Ingress is blocked at three deny-by-default layers, configured during cloud-init
 
 1. **Hetzner Cloud firewall** — pre-created (e.g. `agent-vps-deny-all`, with explicit deny-all rules for both v4 and v6) and attached to the VPS **at server-creation time** via `hcloud server create --firewall ...`. Denies all public-internet inbound before the VPS first boots — no exposure window during cloud-init.
 2. **`ufw` on the VPS** — `ufw default deny incoming` covers both v4 and v6 with one setting; defense in depth (Hetzner firewall + host firewall together).
-3. **Tailscale ACL** — deny-by-default. Explicit allow: laptop → VPS (SSH and any other tailnet-only services). **NO rule allowing VPS → laptop in any direction** — a compromised VPS cannot reach laptop tailnet services (local dev servers, ssh-agent, etc.).
+3. **Tailscale policy** — deny-by-default, but only once it has a `grants` (or `acls`) section: a policy with neither is allow-all. The [SETUP.md Phase 3](./SETUP.md#phase-3-tailscale-5-min) template grants the owner's login (all their personal devices) access to the VPS, plus a Tailscale SSH rule for the chosen user. **No grant has `tag:coding-agent-vps` as its source**, so a compromised VPS cannot reach laptop tailnet services (local dev servers, ssh-agent, etc.). A `tests` block asserts both directions on every policy save, and SETUP.md Phase 7 checks it with a live listener.
 
 **No SSH daemon on the host.** The three layers filter traffic that arrives on `eth0` or `tailscale0`. The sandbox does not arrive that way: a connection from the container to the host's own public or tailnet IP is delivered over loopback, which ufw accepts. So a host service that listens on all interfaces is reachable from the sandbox whatever the firewalls say. The Ubuntu image ships OpenSSH listening on `0.0.0.0:22`, and Hetzner sets a root password on servers created without an SSH key. `scripts/cloud-init-tasks.sh` step 2b therefore masks `ssh.socket` and `ssh.service`, locks root's password, and writes `/etc/ssh/sshd_config.d/10-coding-agent-vps.conf` (no passwords, no root) in case sshd is ever unmasked. `cloud-init.yaml` sets `ssh_pwauth: false` for the minutes before that step runs. Tailscale SSH needs none of it: tailscaled takes port 22 traffic off `tailscale0` and serves the session itself, `scp` and `sftp` included. Break-glass without Tailscale is the Hetzner web console; see [USAGE.md "Locked out"](./USAGE.md#locked-out-tailscale-ssh-does-not-answer).
 
