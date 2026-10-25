@@ -1,0 +1,24 @@
+#!/usr/sbin/nft -f
+# daemon/sandbox-metadata-block.nft — keep dev and the sandbox away from
+# the cloud metadata service. Loaded by sandbox-metadata-block.service;
+# rationale in scripts/cloud-init-tasks.sh step 2c.
+#
+# Its own table, so ufw never flushes it: ufw manages only its own
+# chains in the iptables-nft tables. The first two lines make a reload
+# atomic and idempotent: the whole file is one nft transaction that
+# replaces the table, with no moment where the rules are missing.
+
+table inet agent_vps_metadata
+delete table inet agent_vps_metadata
+
+table inet agent_vps_metadata {
+	chain output {
+		type filter hook output priority filter; policy accept;
+		# Hetzner metadata: 169.254.169.254, and fe80::a9fe:a9fe on IPv6.
+		# Whole link-local ranges, since dev needs none of them. skuid
+		# matches packets sent from dev's sockets; rootless Docker's
+		# slirp4netns, which carries all sandbox traffic, runs as dev.
+		meta skuid "dev" ip daddr 169.254.0.0/16 reject
+		meta skuid "dev" ip6 daddr fe80::/10 reject
+	}
+}

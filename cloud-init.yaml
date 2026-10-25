@@ -33,6 +33,10 @@ packages:
   - curl
   - git
   - jq
+  # nftables: the `nft` tool that loads daemon/sandbox-metadata-block.nft
+  # (scripts/cloud-init-tasks.sh step 2c). nftables.service stays
+  # disabled; only that unit uses it.
+  - nftables
   - openssh-client
   # Installed but masked by scripts/cloud-init-tasks.sh step 2b: nothing
   # listens on port 22. Tailscale SSH serves logins.

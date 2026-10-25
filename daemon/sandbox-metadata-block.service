@@ -1,0 +1,19 @@
+[Unit]
+Description=Block dev and the sandbox from the cloud metadata service
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+# Up before any network and before dev's user manager (rootless dockerd,
+# the sandbox) can start: user@.service runs after systemd-user-sessions.
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target systemd-user-sessions.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# No ExecStop on purpose: stopping the unit must not lift the block.
+# `systemctl restart` reloads the file in one atomic transaction.
+ExecStart=/usr/sbin/nft -f /etc/agent-vps/sandbox-metadata-block.nft
+
+[Install]
+WantedBy=sysinit.target

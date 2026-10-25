@@ -10,6 +10,7 @@
 #   2. Create creds + dev users
 #   2b. Turn host OpenSSH off and lock root's password (Tailscale SSH
 #       is the only way in)
+#   2c. Block dev and the sandbox from the cloud metadata service
 #   3. Pre-create the on-disk directory tree with correct ownership/modes
 #   4. Configure subuid/subgid for dev (default range only — the
 #      previous agent-sockets-group + custom subgid trick was dropped in
@@ -234,6 +235,41 @@ if [[ -n $(ss -Hltn 'sport = :22') ]]; then
 fi
 log "host OpenSSH masked, root password locked"
 
+# === 2c. Sandbox cannot reach the cloud metadata service ===
+#
+# Hetzner's metadata service (169.254.169.254, fe80::a9fe:a9fe) serves
+# the instance's user-data, which is where cloud-init.yaml's
+# placeholders land (the Tailscale auth-key and, for private repos, the
+# deploy key). The sandbox has no business there. Rootless Docker's
+# container traffic leaves the host through slirp4netns, which runs as
+# dev, so rules matching dev's socket UID cut off the sandbox (and
+# host-side dev), while root's cloud-init and qemu-guest-agent keep
+# their access.
+#
+# The rules live in their own nftables table (daemon/sandbox-metadata-
+# block.nft), loaded at boot by a oneshot unit ordered before networking
+# and before dev's user manager. Not in ufw: `ufw reload` flushes its own
+# chains, which would reopen the service for a moment each time.
+# nftables.service stays disabled; its stock config flushes the whole
+# ruleset, ufw's tables included.
+DEV_UID=$(id -u dev)
+install -d -m 0755 -o root -g root /etc/agent-vps
+install -m 0644 /opt/agent-vps/daemon/sandbox-metadata-block.nft /etc/agent-vps/
+install -m 0644 /opt/agent-vps/daemon/sandbox-metadata-block.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable sandbox-metadata-block.service
+# restart, not start: re-applies a changed rule file. The file replaces
+# the table in one transaction, so there is no gap.
+systemctl restart sandbox-metadata-block.service
+# Assert the rules are live, not just written.
+metadata_rules=$(nft list chain inet agent_vps_metadata output 2>/dev/null || true)
+if ! grep -q "skuid ${DEV_UID} ip daddr 169.254.0.0/16 reject" <<<"$metadata_rules" \
+   || ! grep -q "skuid ${DEV_UID} ip6 daddr fe80::/10 reject" <<<"$metadata_rules"; then
+  log "ERROR: metadata block not active (check: sudo nft list table inet agent_vps_metadata)"
+  exit 1
+fi
+log "metadata service blocked for dev (UID ${DEV_UID}) and the sandbox"
+
 # === 3. Directory tree ===
 
 install -d -m 0755 -o root   -g root   /etc/agent-vps
@@ -350,8 +386,7 @@ sudo -u dev -H XDG_RUNTIME_DIR=/run/user/$(id -u dev) \
 # `memory pids cpu`, but we don't want to rely on the distro default —
 # fail loudly here rather than discover it during the next incident.
 # Rootless Docker also applies limits only with the systemd cgroup
-# driver.
-DEV_UID=$(id -u dev)
+# driver. (DEV_UID is set in step 2c.)
 DELEGATED_PATH="/sys/fs/cgroup/user.slice/user-${DEV_UID}.slice/user@${DEV_UID}.service/cgroup.controllers"
 DELEGATED=$(cat "$DELEGATED_PATH" 2>/dev/null || echo "")
 for ctrl in memory pids; do

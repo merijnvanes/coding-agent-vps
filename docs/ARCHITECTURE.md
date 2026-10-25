@@ -110,9 +110,11 @@ Ingress is blocked at three deny-by-default layers, configured during cloud-init
 
 **No SSH daemon on the host.** The three layers filter traffic that arrives on `eth0` or `tailscale0`. The sandbox does not arrive that way: a connection from the container to the host's own public or tailnet IP is delivered over loopback, which ufw accepts. So a host service that listens on all interfaces is reachable from the sandbox whatever the firewalls say. The Ubuntu image ships OpenSSH listening on `0.0.0.0:22`, and Hetzner sets a root password on servers created without an SSH key. `scripts/cloud-init-tasks.sh` step 2b therefore masks `ssh.socket` and `ssh.service`, locks root's password, and writes `/etc/ssh/sshd_config.d/10-coding-agent-vps.conf` (no passwords, no root) in case sshd is ever unmasked. `cloud-init.yaml` sets `ssh_pwauth: false` for the minutes before that step runs. Tailscale SSH needs none of it: tailscaled takes port 22 traffic off `tailscale0` and serves the session itself, `scp` and `sftp` included. Break-glass without Tailscale is the Hetzner web console; see [USAGE.md "Locked out"](./USAGE.md#locked-out-tailscale-ssh-does-not-answer).
 
+**No metadata service for the sandbox.** Hetzner's metadata service (`169.254.169.254`, and `fe80::a9fe:a9fe` on private networks) serves the server's user-data, which holds the cloud-init secrets listed under "Rebuild flow" below. Egress is otherwise open, so `daemon/sandbox-metadata-block.nft` rejects traffic from dev's UID to `169.254.0.0/16` and `fe80::/10`. Rootless Docker sends all container traffic through `slirp4netns`, which runs as dev, so the rules cover the sandbox; root's cloud-init and qemu-guest-agent keep access. The rules live in their own nftables table, loaded at boot by `sandbox-metadata-block.service` before networking and before dev's user manager. ufw never touches that table, so a `ufw reload` cannot open a gap. `scripts/cloud-init-tasks.sh` step 2c installs it and checks that the rules are live.
+
 **IPv6 stays enabled** on the VPS (kernel and interface level). Disabling at the kernel was rejected because it causes silent failures for any service that binds to `::` and breaks IPv6-preferring DNS fallback for package mirrors. The security property we care about — "no public ingress" — is enforced at the firewall layers above, regardless of protocol.
 
-Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity).
+Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity), except for the metadata service above.
 
 **Sandbox dev-server ports are exempt by design.** `docker-compose.yml` publishes a few port ranges (3000-3009, 5170-5179, 8000-8089) bound to `127.0.0.1` on the VPS host. They sit on the loopback interface, not on `eth0` or `tailscale0`, so the three deny layers above don't see them and don't need to — the only path that can reach them is SSH port forwarding from a Tailscale-authenticated laptop session, which is already the access model. See [USAGE.md "Exposing a sandbox dev server"](./USAGE.md#exposing-a-sandbox-dev-server).
 
@@ -205,6 +207,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 /etc/agent-vps/
   infisical-uauth          0600  creds:creds   # bootstrap secret for `coding-agent-vps` project (client id+secret)
   config.env               0644  root:root     # cred-daemon config (project ID, env slug, URL)
+  sandbox-metadata-block.nft 0644 root:root    # nftables rules: dev/sandbox cannot reach the metadata service
 
 /var/lib/agent-vps/
   creds/                                       # raw key material — sandbox cannot see this
@@ -220,7 +223,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 /srv/dev/projects/                dev:dev   # mounted rw into sandbox at /work
 
 /opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time
-  daemon/                                       # cred-daemon, ssh-agent-creds, ssh-agent-bridge units
+  daemon/                                       # cred-daemon, ssh-agent-creds, ssh-agent-bridge, sandbox-metadata-block units
   alerts/                                       # ntfy publisher (best-effort; logs to journal regardless)
   scripts/                                      # provision.sh (laptop), cloud-init-tasks.sh, bootstrap.sh
   sandbox/

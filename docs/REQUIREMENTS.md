@@ -99,6 +99,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 **Egress (outgoing):**
 
 - **WON'T (v1)** — No outbound allowlist on the sandbox. The agent has unrestricted outbound network access, matching the laptop. Tradeoff named in the defense table; non-goals (§8) carries the parity reasoning.
+- **MUST** — One exception to open egress: the sandbox cannot reach the cloud provider's metadata service, which serves the provisioning user-data.
 
 ### Wallet / credential lifecycle
 
