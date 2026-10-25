@@ -331,6 +331,27 @@ disabled. Restarting the rootless daemon restarts the sandbox and kills tmux.
 Update the pins in `scripts/cloud-init-tasks.sh` and `cloud-init.yaml` to
 match.
 
+### Update an existing VPS from the repo
+
+Pull, then re-run the idempotent setup script. It rebuilds the sandbox
+image from cache and installs the current unit files:
+
+```bash
+sudo git -C /opt/agent-vps pull
+sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
+```
+
+The script leaves services that already run alone, so a change to
+`daemon/ssh-agent-creds.service` or `daemon/ssh-agent-bridge.service`
+takes effect only after a restart. Restarting the agent empties it, so
+reload the GitHub key straight after:
+
+```bash
+sudo systemctl restart ssh-agent-creds.service ssh-agent-bridge.service
+sudo systemctl start cred-daemon.service    # loads github-ssh-key into the fresh agent
+docker exec sandbox ssh -T git@github.com   # as dev: expect "Hi <github-username>!"
+```
+
 ### Full VPS rebuild
 
 For OS-level issues or just to test the flow end-to-end:
@@ -471,14 +492,8 @@ Hetzner web console. It is out-of-band and opens no port.
 Do not unmask `ssh.socket` as a workaround. The sandbox reaches host
 port 22 over loopback, past both firewalls.
 
-A VPS provisioned before OpenSSH was masked gets the change by pulling
-and re-running the idempotent setup script (it rebuilds the image from
-cache and leaves running units alone):
-
-```bash
-sudo git -C /opt/agent-vps pull
-sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
-```
+A VPS provisioned before OpenSSH was masked gets the change through
+[Update an existing VPS from the repo](#update-an-existing-vps-from-the-repo).
 
 ### `bootstrap.sh` fails with HTTP 422 from Infisical
 

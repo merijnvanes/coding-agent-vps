@@ -74,7 +74,7 @@ Three zones on the VPS, three trust levels.
 - **Owns**: cred-daemon (systemd service), Infisical Universal Auth bootstrap secret, ssh-agent process, ntfy publisher
 - **Holds**: the GitHub SSH private key (loaded into ssh-agent) and the ntfy topic (read by the alert script). That's it — other cloud-CLI tokens never enter this zone.
 - **Talks to outside**: HTTPS to the `coding-agent-vps` Infisical project (to refresh `github-ssh-key` and `ntfy-topic`), plus HTTPS to `ntfy.sh` from the alert script on cred-daemon failures. Does not call upstream APIs for credential lifecycle management — that's the user's responsibility per REQUIREMENTS.md §5.
-- **Talks to sandbox**: only via the bridged ssh-agent unix socket — a signing oracle, never raw key material.
+- **Talks to sandbox**: only via the bridged ssh-agent unix socket — a signing oracle, never raw key material. The bridge relays the full agent protocol, so ssh-agent runs with `-P ""` and refuses every PKCS#11/FIDO provider library the sandbox could ask it to load.
 - **Trust**: highest — holds the raw GitHub SSH key.
 
 ### Sandbox zone (rootless Docker container)

@@ -468,8 +468,10 @@ systemctl daemon-reload
 # instance keeps the OLD runtime behavior until manually restarted.
 # Service-file changes that need to take effect immediately require:
 #   sudo systemctl restart ssh-agent-creds.service ssh-agent-bridge.service
-# Acceptable trade because restart clears any ssh-agent keys cred-daemon
-# had loaded — forcing it silently on every script re-run is worse.
+#   sudo systemctl start cred-daemon.service   # reload the key into the fresh agent
+# (docs/USAGE.md "Update an existing VPS from the repo"). Acceptable
+# trade because restart clears any ssh-agent keys cred-daemon had
+# loaded — forcing it silently on every script re-run is worse.
 #
 # Ordering matters: ssh-agent-creds first (the bridge's socat connects
 # to its socket), bridge second, timer last. cred-daemon.service itself

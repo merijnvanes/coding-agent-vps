@@ -25,7 +25,12 @@ ExecStartPre=/usr/bin/install -d -m 0755 /var/lib/agent-vps/sockets
 # unit in `failed` state — sandbox git push then breaks with "Permission
 # denied (publickey)". Safe because each ExecStart creates a fresh socket.
 ExecStartPre=/usr/bin/rm -f /var/lib/agent-vps/sockets/ssh-agent.sock
-ExecStart=/usr/bin/ssh-agent -a /var/lib/agent-vps/sockets/ssh-agent.sock
+# -P "": an empty allow-list for PKCS#11 and FIDO middleware libraries.
+# The sandbox talks the full agent protocol through the bridge, and
+# ssh-agent treats it as a local client, so without this it would
+# dlopen() any library under /usr/lib*/* on request (`ssh-add -s`) as
+# creds. We only ever load a plain key file, so refuse every provider.
+ExecStart=/usr/bin/ssh-agent -P "" -a /var/lib/agent-vps/sockets/ssh-agent.sock
 ExecStartPost=/bin/chmod 0666 /var/lib/agent-vps/sockets/ssh-agent.sock
 KillMode=mixed
 # Hardening
