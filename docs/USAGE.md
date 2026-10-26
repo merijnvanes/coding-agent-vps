@@ -354,6 +354,14 @@ sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 The pull merges only a tip commit you signed; see "Signed updates"
 below if it refuses.
 
+The script builds the new image but leaves the running sandbox alone.
+A change to `docker-compose.yml` or `sandbox/` takes effect only when
+you recreate it, which ends the tmux session and every agent in it:
+
+```bash
+cd /opt/agent-vps && docker compose up -d
+```
+
 The script leaves services that already run alone, so a change to
 `daemon/ssh-agent-creds.service` or `daemon/ssh-agent-bridge.service`
 takes effect only after a restart. The agent loads the cached GitHub
@@ -388,8 +396,9 @@ the raw GitHub key in `coding-agent-vps` included. To move over:
    `infisical export --projectId=<coding-agent-vps project ID>
    --env=dev >/dev/null` fails with "Unable to fetch secrets". The
    redirect keeps the values off your screen if it does not fail.
-6. In Infisical, end your old sessions (Personal Settings → sessions,
-   or change your password), so a copy of the old login stops working.
+6. In Infisical, end your old sessions (Personal Settings → General →
+   Sessions → Sign out everywhere), so a copy of the old login stops
+   working.
 
 ### Signed updates
 

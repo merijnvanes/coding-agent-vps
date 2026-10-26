@@ -70,7 +70,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       openssh-client \
       python3 \
       python3-venv \
-      sudo \
       tmux \
       unzip \
     && rm -rf /var/lib/apt/lists/*

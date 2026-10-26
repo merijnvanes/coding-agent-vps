@@ -231,7 +231,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
   agent-token/                                 # mounted read-only into sandbox; 0755 dir
     token                  0644  creds:creds   # 1-hour Infisical access token for `<vps-name>-agent`, refreshed every 20 min
 
-/srv/dev/projects/                dev:dev   # mounted rw into sandbox at /work
+/srv/dev/projects/          0770  dev:dev   # mounted rw into sandbox at /work; ACL u:<subuid base + 999>:rwx for the sandbox's `agent`
 
 /opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time; pulls only owner-signed commits
   daemon/                                       # cred-daemon, agent-token, ssh-agent-creds, ssh-agent-bridge, sandbox-metadata-block units

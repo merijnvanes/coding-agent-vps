@@ -322,12 +322,9 @@ install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/env
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/sockets
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-token
 
-# Project workspace. Mode 0777 so the rootless-Docker-mapped sandbox UID
-# (host UID dev_subuid_base + 999) can write here in addition to host
-# dev. On this single-user box the practical access set is unchanged
-# (only dev and rootless containers ever access this dir).
-install -d -m 0777 -o dev -g dev /srv/dev
-install -d -m 0777 -o dev -g dev /srv/dev/projects
+# Project workspace: /srv/dev/projects is created and locked down in
+# step 4, once the sandbox's mapped UID is known.
+install -d -m 0755 -o dev -g dev /srv/dev
 
 # === 4. subuid / subgid for rootless Docker ===
 # Default range — required by dockerd-rootless-setuptool.sh below. No custom
@@ -335,6 +332,23 @@ install -d -m 0777 -o dev -g dev /srv/dev/projects
 # in favor of a 0666 ssh-agent socket; see daemon/ssh-agent-creds.service).
 grep -q '^dev:100000:' /etc/subuid || echo "dev:100000:65536" >> /etc/subuid
 grep -q '^dev:100000:' /etc/subgid || echo "dev:100000:65536" >> /etc/subgid
+
+# Project workspace. Only dev and the sandbox may write here; no other
+# host user (creds, emailmeta, service users) may plant files in the
+# agent's working tree. The sandbox's `agent` (UID 1000 in the
+# container) is host UID subuid_base + 999 under rootless Docker:
+# container UID 0 maps to dev, UID 1 to subuid_base. The ACL goes on
+# before the mode closes, so a running sandbox on an older VPS (where
+# the directory was 0777) keeps access throughout. cloud-init.yaml
+# installs acl on a new VPS; an older one may not have it yet.
+command -v setfacl >/dev/null || apt-get install -y --no-install-recommends acl
+DEV_SUBUID_BASE=$(awk -F: '$1 == "dev" { print $2; exit }' /etc/subuid)
+[[ "$DEV_SUBUID_BASE" =~ ^[0-9]+$ ]] || { log "FATAL: no subuid range for dev"; exit 1; }
+SANDBOX_HOST_UID=$(( DEV_SUBUID_BASE + 999 ))
+[[ -d /srv/dev/projects ]] || install -d -m 0770 -o dev -g dev /srv/dev/projects
+setfacl -m "u:${SANDBOX_HOST_UID}:rwx" /srv/dev/projects
+chown dev:dev /srv/dev/projects
+chmod 0770 /srv/dev/projects
 
 # === 5. Docker + rootless setup ===
 

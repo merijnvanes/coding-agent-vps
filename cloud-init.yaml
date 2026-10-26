@@ -31,6 +31,9 @@ package_upgrade: true
 ssh_pwauth: false
 
 packages:
+  # acl: `setfacl` gives the sandbox's mapped UID write access to
+  # /srv/dev/projects (scripts/cloud-init-tasks.sh step 4).
+  - acl
   - bash
   - ca-certificates
   - curl

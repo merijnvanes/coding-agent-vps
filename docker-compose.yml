@@ -75,6 +75,24 @@ services:
     # the pids controller is delegated, so this is not a silent no-op.
     pids_limit: 4096
 
+    # No CPU cap. cgroup v2 already shares CPU by weight: the sandbox
+    # competes with dockerd/slirp4netns inside dev's user manager, dev's
+    # SSH sessions compete with that whole manager, and system services
+    # get their own share. Measured with all 4 cores of a cx33 busy in the
+    # sandbox: a host shell and a system.slice task ran 10–30% slower,
+    # `docker exec` answered in ~230 ms. A hard `cpus:` cap would leave
+    # cores idle while the host is idle and buy nothing under load.
+
+    # No Linux capabilities and no privilege gain. The agent user has none
+    # to begin with; this removes what setuid binaries (su, passwd,
+    # mount, ...) could grant, and what `docker exec -u root` would get.
+    # Root in here can no longer chown or install packages: add tools in
+    # sandbox/Dockerfile instead.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
     # Host-loopback dev-server ports — reachable ONLY via SSH port forwarding
     # from the laptop:
     #     ssh -L 3000:127.0.0.1:3000 dev@coding-agent-vps
