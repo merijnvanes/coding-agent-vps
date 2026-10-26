@@ -45,17 +45,11 @@ for the failure mode this prevents.
 
 ## Using the sandbox cloud CLIs
 
-`hcloud`, `wrangler`, `gcloud`, and `supabase` are wrapped by PATH shims at `/opt/agent-vps-wrappers/`. Each shim transparently fetches the matching token from the `coding-agent-vps-tooling` Infisical project at command-time and injects it into the subprocess environment for that one invocation. The token never persists on disk inside the sandbox.
+`hcloud`, `wrangler`, `gcloud`, `supabase` and `seo` are wrapped by PATH shims at `/opt/agent-vps-wrappers/`. Each shim fetches only its own token from the `coding-agent-vps-tooling` Infisical project at command-time and injects it into the subprocess environment for that one invocation. The token never persists on disk inside the sandbox.
 
-Once per container, log in to Infisical:
+The sandbox reads Infisical as its own machine identity, `<vps-name>-agent`, never as you. Nothing to log in to: the host refreshes a 1-hour access token for that identity every 20 minutes (`agent-token.timer`), and the `infisical` shim hands it to every Infisical call. The identity's client secret stays on the host, so a token copied out of the sandbox stops working within the hour. **Never run `infisical login` in the sandbox.** That would put your own account, with everything it can reach, back in the agent's hands.
 
-```bash
-infisical login --domain https://app.infisical.com/api   # --domain skips the region prompt
-```
-
-This is a browser login with a localhost callback, not a device code. It prints `https://app.infisical.com/login?callback_port=<port>`, and the browser hands the token to `127.0.0.1:<port>` inside the container. Open the URL on the laptop with that port relayed into the container (ssh + `docker exec -i sandbox`), and the login completes by itself. Never test the callback port with curl: one bad request kills the listener. The session lasts about 10 days.
-
-Then use the CLIs normally:
+Use the CLIs normally:
 
 ```bash
 hcloud server list                        # HCLOUD_TOKEN fetched per-command, in env for one subprocess
@@ -66,9 +60,9 @@ gcloud auth list                          # GCP SA JSON, written to /dev/shm tem
 
 **Don't `supabase login` (or any "login" inside these CLIs).** That writes their token to `~/.supabase/access-token` / equivalent paths on disk, persisting across the container lifetime. The shims keep tokens in process memory only.
 
-`infisical login` writes a session token to `~/.infisical/` inside the container, which persists for the container's lifetime — so subsequent shim invocations don't re-prompt — but is NOT on a named volume. The whole `~/.infisical/` directory is discarded on `docker compose up -d --build` or a full VPS rebuild. After a rebuild, `infisical login` again.
+The trade is precise: no **cloud-provider** tokens (Hetzner, Cloudflare, GCP, Supabase) at rest inside the sandbox. The **Infisical access token** at `/run/agent-token/token` is readable by the agent, by design: it is what lets the shims work. It reaches only the projects the agent identity is a member of, and it expires within the hour. The agent can still read every secret in those projects with it, because a process the agent starts can print what it is given. The point is a short-lived, narrow credential, not a hidden one.
 
-The trade is precise: no **cloud-provider** tokens (Hetzner, Cloudflare, GCP, Supabase) at rest inside the sandbox. An **Infisical session credential** lives in `~/.infisical/` for the container's lifetime; that's how the shims can authenticate without prompting on every command. The session is scoped to your personal Infisical identity, can be revoked from the Infisical admin UI, and dies on rebuild.
+If a shim fails with "no agent token", check the host side: `sudo systemctl status agent-token.timer agent-token.service` and `sudo journalctl -u agent-token.service -n 20`. The service refuses to hand out a token (and alerts) when the identity's token TTL is above 1 hour, or when the identity can read the `coding-agent-vps` project.
 
 ## Using your app's secrets inside the sandbox
 
@@ -79,21 +73,24 @@ cd /work/<your-project>
 infisical run --env=dev -- npm start         # or pnpm / uv run / etc.
 ```
 
-`infisical run` reads `.infisical.json` in the current directory (committed in the project repo, points at the right Infisical project), fetches the secrets, sets them in the subprocess env, runs the command. Same trust model as the cloud-CLI shims — secret in process memory for one command, never on disk.
+`infisical run` gets the project from `.infisical.json` in the current directory or a parent (committed in the project repo, points at the right Infisical project), fetches the secrets, sets them in the subprocess env, runs the command. Same trust model as the cloud-CLI shims — secret in process memory for one command, never on disk. (Under a machine identity the CLI itself ignores `.infisical.json`; the `infisical` shim reads it and passes the project on.)
 
-If the project doesn't have `.infisical.json` yet:
+A new app needs two things before this works:
 
-```bash
-cd /work/<your-project>
-infisical init                # interactive — pick the Infisical project + env, writes .infisical.json
-```
+1. **In Infisical (owner):** open the app's project → Access Control → Machine Identities → add `<vps-name>-agent` as **Viewer**. Viewer reads every environment of that project on the free plan, so keep production secrets in the deploy platform (Cloudflare, GitHub Actions) or in a separate project the agent is not a member of.
+2. **In the repo:** if it has no `.infisical.json` yet, write one with the project's ID (Infisical → project → Settings). `infisical init` needs a personal login, so it does not work here.
 
-The Infisical projects you log into from this sandbox are scoped per use:
+   ```bash
+   cd /work/<your-project>
+   printf '{"workspaceId":"%s"}\n' <project-id> > .infisical.json
+   ```
+
+The agent identity is a member of exactly these projects:
 
 - `coding-agent-vps-tooling` — account-wide cloud-CLI tokens (consumed by PATH shims)
 - Per-app projects (`dobudex`, etc.) — app-specific secrets (consumed by `infisical run --` from the project dir)
 
-The third project, `coding-agent-vps`, holds the host-side credentials managed by cred-daemon on the VPS host. cred-daemon uses its own Universal Auth identity for it. No sandbox infrastructure (no shim, no `.infisical.json` in any project dir) is configured to read from `coding-agent-vps` — though your personal Infisical login inside the sandbox technically has Viewer access to all three projects under your account. The split is organizational (rotation cadence, blast radius on revocation), not a hard isolation boundary inside the sandbox.
+The third project, `coding-agent-vps`, holds the host-side credentials managed by cred-daemon on the VPS host, including the raw GitHub key. cred-daemon uses its own identity, `<vps-name>-creds`, for it. The agent identity is not a member, Infisical refuses it, and `agent-token.service` checks that on every refresh.
 
 ## Exposing a sandbox dev server
 
@@ -247,10 +244,14 @@ the host is the highest-leverage action you can take.
    per service. Assume any credential the daemon had fetched is in
    the attacker's hands.
 4. **Revoke the VPS's Infisical access.** Infisical → Access Control
-   → Identities → `agent-vps` → revoke the Universal Auth client
-   secret. Belt-and-suspenders — with the VPS deleted there's no
-   client to use the secret, but revoking ensures the secret can't be
-   reused if it leaked.
+   → Machine Identities → for both `<vps-name>-creds` and
+   `<vps-name>-agent`, revoke the Universal Auth client secret.
+   Belt-and-suspenders — with the VPS deleted there's no client to use
+   the secrets, and the agent's tokens die within the hour, but
+   revoking ensures a leaked client secret can't be reused. Also treat
+   every secret in the projects the agent identity could read (tooling
+   and app projects) as exposed: those get fresh values in step 3 and
+   step 5.
 5. **Reprovision** by running `./scripts/provision.sh` (or by having
    your agent walk you through SETUP.md again — much shorter the
    second time since external services are already configured). Make
@@ -307,14 +308,10 @@ To change only the process cap without recreating the container (which
 would kill tmux), apply the compose value in place:
 `docker update --pids-limit 4096 sandbox`.
 
-The `infisical login` session does NOT persist across rebuilds (no
-named volume — intentional, the sandbox holds no long-lived secret
-material at rest). After every container rebuild, run `infisical login`
-again inside the new tmux session before any cloud-CLI commands. Until
-you do, `hcloud` / `wrangler` / `gcloud` / `supabase` and any
-`infisical run --` invocation will fail with "Not logged in."
+Infisical needs nothing after a rebuild: the host keeps refreshing the
+agent token, and the new container mounts it at `/run/agent-token/`.
 
-The rest of the writable layer goes too. Redo `seo auth login` (night-shift
+The rest of the writable layer goes. Redo `seo auth login` (night-shift
 README, setup step 2), and set `git config --global user.name` and
 `user.email` again, because `~/.gitconfig` is not in the image. Night-shift
 workers use a headless Chromium that also lives there. Reinstall it in the
@@ -368,6 +365,29 @@ docker exec sandbox ssh -T git@github.com   # as dev: expect "Hi <github-usernam
 If that says "Permission denied (publickey)", the cached key is
 missing or stale: `sudo systemctl start cred-daemon.service` fetches
 it from Infisical and loads it.
+
+**Moving a VPS from `infisical login` to the agent identity.** VPSes
+set up before `agent-token.timer` existed have your personal Infisical
+login inside the sandbox. That login reaches every project you can,
+the raw GitHub key in `coding-agent-vps` included. To move over:
+
+1. Create `<vps-name>-agent` in Infisical (SETUP.md Phase 2,
+   "Identity for the sandbox"). Optionally rename cred-daemon's
+   identity to `<vps-name>-creds`; it logs in by client ID, so the
+   name does not matter to it.
+2. On the VPS, pull and run the setup script as above. It installs and
+   starts `agent-token.timer`.
+3. `sudo /opt/agent-vps/scripts/agent-identity.sh`: paste the client
+   ID and the client secret.
+4. Recreate the sandbox so it gets the new shims and the token mount,
+   and so the old `~/.infisical/` login is discarded:
+   `cd /opt/agent-vps && docker compose up -d --build`.
+5. Check from the sandbox: `hcloud server list` works, and
+   `infisical export --projectId=<coding-agent-vps project ID>
+   --env=dev >/dev/null` fails with "Unable to fetch secrets". The
+   redirect keeps the values off your screen if it does not fail.
+6. In Infisical, end your old sessions (Personal Settings → sessions,
+   or change your password), so a copy of the old login stops working.
 
 ### Signed updates
 
@@ -662,18 +682,20 @@ A VPS provisioned before OpenSSH was masked gets the change through
 ### `bootstrap.sh` fails with HTTP 422 from Infisical
 
 Almost always: **Client ID was pasted incorrectly** — typically the
-identity's *name* (e.g. `agent-vps`) instead of the Universal Auth
-Client ID UUID (e.g. `d40df785-1383-...`).
+identity's *name* (e.g. `coding-agent-vps-creds`) instead of the
+Universal Auth Client ID UUID (e.g. `d40df785-1383-...`).
 
 Confirm:
 
 ```bash
 sudo journalctl -u cred-daemon.service -n 20 --no-pager
+sudo journalctl -u agent-token.service -n 20 --no-pager
 ```
 
-Look for `curl: (22) ... error: 422`. Re-run `bootstrap.sh` and use
-the UUID from Access Control → Identities → `agent-vps` →
-Authentication Methods → Universal Auth → Client ID.
+Look for `curl: (22) ... error: 422`. Re-run `bootstrap.sh` (or only
+`scripts/agent-identity.sh` for the sandbox identity) and use the UUID
+from Access Control → Machine Identities → the identity → Universal
+Auth → Client ID.
 
 ### Cloud-init seems stuck (no progress for 15+ min)
 

@@ -9,7 +9,8 @@
 # Cloud-CLI tokens (HCLOUD_TOKEN, CLOUDFLARE_API_TOKEN, GCP_SA_KEY_JSON,
 # SUPABASE_ACCESS_TOKEN, etc.) do NOT pass through this daemon. They live in
 # the `coding-agent-vps-tooling` Infisical project and are fetched per-command
-# by sandbox-side PATH shims (sandbox/wrappers/) via `infisical run --`. The
+# by sandbox-side PATH shims (sandbox/wrappers/), as the sandbox's own
+# Infisical identity (daemon/agent-token.sh hands it short-lived tokens). The
 # host never sees those tokens at rest. See docs/ARCHITECTURE.md
 # "Per-CLI integration" for the full flow.
 #
@@ -24,7 +25,7 @@
 #   - Mint, rotate, or call any upstream service's API. Upstream credential
 #     lifecycle is the user's responsibility (docs/REQUIREMENTS.md §5).
 #   - Fetch or write any sandbox-side / cloud-CLI / per-app secret. Those
-#     paths live entirely in the sandbox via `infisical run --`.
+#     paths live entirely in the sandbox.
 #
 # Runs as user `creds` via cred-daemon.service. Triggered:
 #   - On boot (multi-user.target)

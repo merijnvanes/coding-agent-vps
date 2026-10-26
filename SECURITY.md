@@ -49,14 +49,21 @@ the canonical version. Briefly:
   as root) pulls only commits signed by the owner's laptop signing key,
   and cloud-init checks the same signature before the first setup run.
   The trusted key lives in a root-owned file the repo never writes.
+- A compromised agent cannot use the owner's Infisical account or
+  read the host-side `coding-agent-vps` project (which holds the raw
+  GitHub key). The sandbox reads Infisical as its own machine
+  identity, which is not a member of that project; it gets only
+  1-hour access tokens, and the client secret stays on the host.
 
 **Out of scope / explicit residuals**:
-- A compromised agent **can** exfiltrate any credential the cred-
-  daemon has fetched into the sandbox during its lifetime (env-
-  export tokens, gcloud SA key JSON, OAuth refresh tokens). The
-  ssh-agent abstraction limits this for the GitHub key (signing
-  only, key bytes never reach the sandbox), but other credentials
-  are read as files. Mitigations: rotate at the issuer after any
+- A compromised agent **can** exfiltrate any credential the sandbox
+  can use: every secret in the Infisical tooling and app projects
+  the agent identity is a member of, the gcloud SA key JSON, OAuth
+  refresh tokens. The ssh-agent abstraction limits this for the
+  GitHub key (signing only, key bytes never reach the sandbox), but
+  other credentials pass through processes the agent controls. A
+  copied Infisical access token dies within the hour; the secrets
+  read with it do not. Mitigations: rotate at the issuer after any
   suspected compromise (see [docs/USAGE.md "Incident response"](./docs/USAGE.md)).
 - A compromised agent **can** push to any GitHub repo the user has
   write access to (the SSH key acts as the user). The architecture

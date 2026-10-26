@@ -5,7 +5,7 @@
 # in sandbox-config.sh) is sourced via /etc/profile.d/agent-env.sh, which
 # is read by every interactive bash login shell (including new tmux
 # windows). The PATH shims at /opt/agent-vps-wrappers/ then use those env
-# vars to invoke `infisical run --` per command. Cloud-CLI tokens
+# vars to fetch their token per command. Cloud-CLI tokens
 # themselves never enter any persistent shell env — they live in the
 # subprocess env of one command at a time.
 #
@@ -24,8 +24,8 @@
 #      is independent.
 #   4. If tmux server dies (legit OOM kill, manual kill-server, etc.),
 #      `docker exec -it sandbox tmux new-session -A -s main` recreates
-#      it; the container's writable layer (~/.infisical/login state,
-#      etc.) survives untouched. Compare with the old design where the
+#      it; the container's writable layer (~/.gitconfig, etc.) survives
+#      untouched. Compare with the old design where the
 #      same event would have triggered a full container restart that
 #      nuked the writable layer.
 

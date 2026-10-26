@@ -29,8 +29,8 @@ services:
     # any reason (OOM kill of the bash shell in a pane, manual kill-server,
     # etc.), the container stays up. User reconnects, runs
     # `docker exec -it sandbox tmux new-session -A -s main` to recreate,
-    # and the container's writable layer (e.g. `~/.infisical/login`
-    # session) is preserved. Before this change, today's OOM cascade
+    # and the container's writable layer (e.g. `~/.gitconfig`) is
+    # preserved. Before this change, today's OOM cascade
     # killed the container — see commit history + docs/USAGE.md
     # "VPS unresponsive". Caveat: SIGTERM on `docker stop` is forwarded
     # only to the entrypoint's `sleep infinity`, so the tmux server gets
@@ -107,6 +107,15 @@ services:
       - type: bind
         source: /var/lib/agent-vps/agent-config/env
         target: /run/agent-env
+        read_only: true
+
+      # Short-lived Infisical access token for the sandbox's machine
+      # identity — daemon/agent-token.sh refreshes it every 20 minutes;
+      # sandbox/wrappers/infisical reads it. The directory is mounted, not
+      # the file, so the host's atomic rename shows up in here.
+      - type: bind
+        source: /var/lib/agent-vps/agent-token
+        target: /run/agent-token
         read_only: true
 
       # Project working tree (rw)

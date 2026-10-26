@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# sandbox/wrappers/infisical — PATH shim
+#
+# Signs every Infisical CLI call in as the sandbox's machine identity
+# (`<vps-name>-agent`), never as the owner. The host refreshes a 1-hour
+# access token for that identity every 20 minutes and leaves it at
+# /run/agent-token/token (daemon/agent-token.sh). The identity's client
+# secret stays on the host, so a copied token dies within the hour.
+#
+# The other shims (hcloud, wrangler, ...) and `infisical run --` in app
+# directories all resolve `infisical` to this shim.
+#
+# Real binary: /usr/bin/infisical
+
+set -euo pipefail
+
+TOKEN_FILE=/run/agent-token/token
+API_URL_FILE=/run/agent-token/api-url
+
+# No token means no Infisical. Never fall through to the real CLI without
+# one: it would use any saved personal login instead, and the owner's
+# account reaches every project.
+if [[ ! -r "$TOKEN_FILE" ]] || ! INFISICAL_TOKEN=$(<"$TOKEN_FILE") || [[ -z "$INFISICAL_TOKEN" ]]; then
+  echo "infisical shim: no agent token at $TOKEN_FILE. On the host, check:" >&2
+  echo "  sudo systemctl status agent-token.timer agent-token.service" >&2
+  echo "  (docs/USAGE.md \"Using the sandbox cloud CLIs\")" >&2
+  exit 1
+fi
+export INFISICAL_TOKEN
+# The CLI prefers this variable over INFISICAL_TOKEN; one left in the
+# environment (by a script, or by an app's `infisical run`) would pick
+# another identity.
+unset INFISICAL_UNIVERSAL_AUTH_ACCESS_TOKEN
+
+# The token belongs to the Infisical region the host logged in to
+# (INFISICAL_URL in /etc/agent-vps/config.env); the CLI defaults to US.
+# INFISICAL_DOMAIN outranks INFISICAL_API_URL, so set both.
+unset INFISICAL_DOMAIN INFISICAL_API_URL
+if [[ -s "$API_URL_FILE" ]]; then
+  INFISICAL_API_URL=$(<"$API_URL_FILE")
+  export INFISICAL_API_URL INFISICAL_DOMAIN="$INFISICAL_API_URL"
+fi
+
+# Under a machine identity the CLI ignores `.infisical.json` and asks for
+# --projectId. Hand it the nearest project file's workspaceId through
+# INFISICAL_PROJECT_ID, so `infisical run --env=dev -- npm start` in an app
+# directory keeps working. An explicit --projectId still wins.
+#
+# `infisical run` passes its environment on to the command it starts, so a
+# value this shim exported earlier reaches nested calls. AGENT_VPS_AUTO_PROJECT_ID
+# marks such a value: it is detected again from the current directory, so
+# `cd /work/app-b && infisical run ...` inside app A's run gets app B. A
+# value the caller set themselves is left alone.
+#
+# `--project-config-dir <dir>` names the project file's directory; like the
+# CLI, look only there. Otherwise search up from the current directory.
+config_dir=""
+args=("$@")
+i=0
+while (( i < ${#args[@]} )); do
+  case "${args[i]}" in
+    --) break ;;
+    --project-config-dir=*) config_dir=${args[i]#*=} ;;
+    --project-config-dir)   config_dir=${args[i+1]:-}; i=$((i + 1)) ;;
+  esac
+  i=$((i + 1))
+done
+
+if [[ -z "${INFISICAL_PROJECT_ID:-}" || "${INFISICAL_PROJECT_ID}" == "${AGENT_VPS_AUTO_PROJECT_ID:-}" ]]; then
+  unset INFISICAL_PROJECT_ID AGENT_VPS_AUTO_PROJECT_ID
+  project_file=""
+  if [[ -n "$config_dir" ]]; then
+    project_file="$config_dir/.infisical.json"
+  else
+    dir=$PWD
+    while :; do
+      if [[ -r "$dir/.infisical.json" ]]; then
+        project_file="$dir/.infisical.json"
+        break
+      fi
+      [[ "$dir" == / ]] && break
+      dir=$(dirname "$dir")
+    done
+  fi
+  if [[ -n "$project_file" && -r "$project_file" ]]; then
+    project_id=$(jq -r '.workspaceId // empty' "$project_file" 2>/dev/null || true)
+    if [[ -n "$project_id" ]]; then
+      export INFISICAL_PROJECT_ID="$project_id" AGENT_VPS_AUTO_PROJECT_ID="$project_id"
+    fi
+  fi
+fi
+
+exec /usr/bin/infisical "$@"

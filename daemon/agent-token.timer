@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh the sandbox's Infisical token every 20 minutes
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+
+[Timer]
+# The token lives 1 hour (agent-token.sh MAX_TTL), so a 20-minute cycle
+# survives two failed refreshes before the sandbox loses access.
+OnBootSec=30s
+OnUnitActiveSec=20min
+AccuracySec=1min
+Unit=agent-token.service
+
+[Install]
+WantedBy=timers.target

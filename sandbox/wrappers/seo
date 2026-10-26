@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # sandbox/wrappers/seo — PATH shim
 #
-# Wraps the real seo binary in `infisical run --` so DATAFORSEO_LOGIN and
-# DATAFORSEO_PASSWORD are fetched from the coding-agent-vps-tooling
-# Infisical project at command-invocation time. The seo CLI reads them as
-# SEO_DATAFORSEO_*; the rename happens in the child shell. DO_NOT_TRACK
-# turns off the CLI's anonymous usage telemetry. See
-# sandbox/wrappers/hcloud for the full pattern + env var requirements.
+# Fetches DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD and SEO_BING_API_KEY from
+# the coding-agent-vps-tooling Infisical project at command-invocation
+# time and passes only those to the real seo. The seo CLI reads the
+# DataForSEO pair as SEO_DATAFORSEO_*. DO_NOT_TRACK turns off the CLI's
+# anonymous usage telemetry. See sandbox/wrappers/hcloud for the full
+# pattern + env var requirements.
 #
 # Real binary: /usr/local/pnpm/bin/seo
 
@@ -15,7 +15,16 @@ set -euo pipefail
 : "${INFISICAL_TOOLING_PROJECT_ID:?INFISICAL_TOOLING_PROJECT_ID not set — host bootstrap.sh has not populated /run/agent-env/sandbox-config.sh, or this shell did not source /etc/profile.d/agent-env.sh}"
 : "${INFISICAL_ENV:=dev}"
 
-exec infisical run \
-    --projectId "$INFISICAL_TOOLING_PROJECT_ID" \
-    --env="$INFISICAL_ENV" \
-    -- sh -c 'DO_NOT_TRACK=1 SEO_DATAFORSEO_LOGIN="${DATAFORSEO_LOGIN:-}" SEO_DATAFORSEO_PASSWORD="${DATAFORSEO_PASSWORD:-}" exec /usr/local/pnpm/bin/seo "$@"' sh "$@"
+# Exports one tooling secret as $2 (default: its own name). A missing
+# secret stays unset, as it did under `infisical run`.
+export_secret() {
+  local value
+  value=$(infisical secrets get --projectId="$INFISICAL_TOOLING_PROJECT_ID" --env="$INFISICAL_ENV" --plain "$1")
+  [[ -z "$value" ]] || export "${2:-$1}=$value"
+}
+
+export_secret DATAFORSEO_LOGIN SEO_DATAFORSEO_LOGIN
+export_secret DATAFORSEO_PASSWORD SEO_DATAFORSEO_PASSWORD
+export_secret SEO_BING_API_KEY
+export DO_NOT_TRACK=1
+exec /usr/local/pnpm/bin/seo "$@"

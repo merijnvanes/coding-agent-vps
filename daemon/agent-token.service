@@ -1,0 +1,19 @@
+[Unit]
+Description=Coding Agent VPS — short-lived Infisical token for the sandbox
+Documentation=https://github.com/merijnvanes/coding-agent-vps
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=creds
+Group=creds
+ExecStart=/opt/agent-vps/daemon/agent-token.sh
+# Read-only access to the agent identity's client secret + config
+ReadOnlyPaths=/etc/agent-vps
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agent-vps/agent-token
+ProtectHome=true
+PrivateTmp=true

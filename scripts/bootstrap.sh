@@ -26,7 +26,7 @@ CORE_PROJECT_ID=$(ask    "Infisical project ID — coding-agent-vps (host-side)"
 TOOLING_PROJECT_ID=$(ask "Infisical project ID — coding-agent-vps-tooling (sandbox-side)")
 ENV=$(ask                "Infisical environment slug" "dev")
 URL=$(ask                "Infisical URL" "https://app.infisical.com")
-CLIENT_ID=$(ask          "Universal Auth client ID (agent-vps identity in the coding-agent-vps project)")
+CLIENT_ID=$(ask          "Universal Auth client ID (<vps-name>-creds identity in the coding-agent-vps project)")
 CLIENT_SECRET=$(ask_secret "Universal Auth client secret (input hidden)")
 echo
 
@@ -74,6 +74,9 @@ else
   echo "    journalctl -u cred-daemon.service -n 80 --no-pager"
   exit 1
 fi
+
+# --- The sandbox's own Infisical identity ---
+"$(dirname "$0")/agent-identity.sh"
 
 echo
 echo "=== Done ==="

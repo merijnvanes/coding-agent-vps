@@ -147,10 +147,11 @@ ENV PATH="${PNPM_HOME}/bin:${PATH}"
 RUN mkdir -p "${PNPM_HOME}/bin"
 
 # --- PATH shims for sandbox-side cloud CLIs ---
-# Each shim wraps the real binary in `infisical run -- <real-binary>`, so the
-# matching cloud-CLI token is fetched from the coding-agent-vps-tooling
-# Infisical project at command-invocation time, lands in the subprocess env
-# for one command, and is gone when the command exits. See
+# Each shim fetches only its own cloud-CLI token from the
+# coding-agent-vps-tooling Infisical project at command-invocation time and
+# execs the real binary, so the token lands in the subprocess env for one
+# command and is gone when the command exits. The `infisical` shim gives
+# every Infisical call the host's short-lived agent token. See
 # docs/ARCHITECTURE.md "Per-CLI integration".
 #
 # /opt/agent-vps-wrappers is FIRST in $PATH so unqualified invocations
@@ -233,9 +234,9 @@ RUN curl -fsSL "https://github.com/hetznercloud/cli/releases/download/v${HCLOUD_
 # SHA256-verified, parallel to uv/hcloud. Used by per-app projects under /work
 # that talk to Supabase. The agent should NEVER run `supabase login` inside
 # the sandbox (that writes the access token to ~/.supabase/access-token on
-# disk). Instead, store SUPABASE_ACCESS_TOKEN in the per-app Infisical project
-# and invoke via `infisical run -- supabase <cmd>` so the token lives only in
-# process memory for the command's duration. See docs/USAGE.md.
+# disk). Instead, the supabase PATH shim fetches SUPABASE_ACCESS_TOKEN from
+# Infisical per command, so the token lives only in process memory for the
+# command's duration. See docs/USAGE.md.
 RUN curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CLI_VERSION}/supabase_linux_amd64.tar.gz" \
         -o /tmp/supabase.tar.gz \
     && echo "${SUPABASE_CLI_SHA256}  /tmp/supabase.tar.gz" | sha256sum -c - \
@@ -243,12 +244,12 @@ RUN curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CL
     && rm /tmp/supabase.tar.gz
 
 # --- Infisical CLI (single Go binary) ---
-# For use by app projects under /work that have their own Infisical workspace
-# (`infisical login` + `infisical run -- <cmd>`). Distinct from the host
-# cred-daemon, which fetches *operational* secrets for the agent-vps wallet
-# and routes them to bind-mounted files. The two workspaces / identities
-# don't see each other. Login state is intentionally NOT persisted across
-# container rebuilds — see docs/USAGE.md.
+# Used by the PATH shims and by app projects under /work (`infisical run --
+# <cmd>`). It always runs as the sandbox's machine identity: the `infisical`
+# shim hands it the token the host refreshes (daemon/agent-token.sh). That
+# identity is not a member of the coding-agent-vps project, which cred-daemon
+# reads with its own identity. Never `infisical login` here — see
+# docs/USAGE.md "Using the sandbox cloud CLIs".
 #
 # Manual APT setup (no `setup.deb.sh | bash`). Inlines exactly what the
 # upstream Cloudsmith setup script does — fetch the GPG key file, dearmor

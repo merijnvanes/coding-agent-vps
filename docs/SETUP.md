@@ -466,7 +466,7 @@ workloads project.
    - Note the **Project ID** (Project → Settings → General, or the UUID in the project URL). This is `INFISICAL_PROJECT_ID` later.
    - Decide which environment to use. Ask the user: "Which Infisical environment do you want to populate? (default: `dev` — the slug, not the display name `Development`)". Note the slug. Same slug applies to BOTH projects.
    - Access Control → Identities → Create Identity:
-     - Name: `agent-vps`
+     - Name: `coding-agent-vps-creds` (`<vps-name>-creds`: cred-daemon on that VPS)
      - Role: **Viewer** (read-only on secrets)
    - On the new identity, Add Authentication → Universal Auth.
    - Note the **Client ID** (UUID format like `d40df785-1383-...`). This is NOT the identity name.
@@ -475,9 +475,17 @@ workloads project.
      - Max uses: `0` (unlimited)
      - **Copy the secret immediately** to their password manager — shown once.
 
-3. **Create project B: `coding-agent-vps-tooling`** — sandbox-side, holds account-wide cloud-CLI tokens. No Universal Auth needed (the sandbox uses interactive `infisical login` with the user's own Infisical account).
+3. **Create project B: `coding-agent-vps-tooling`** — sandbox-side, holds account-wide cloud-CLI tokens.
    - Note the **Project ID**. This is `INFISICAL_TOOLING_PROJECT_ID` later.
    - Same environment slug as project A.
+
+4. **Identity for the sandbox: `coding-agent-vps-agent`.** The sandbox reads Infisical as this machine identity, never as the user. The user's own account is an organization Admin and can read every project, the raw GitHub key in project A included, so it must never be logged in inside the sandbox.
+   - Organization → Access Control → Machine Identities → Create:
+     - Name: `coding-agent-vps-agent` (`<vps-name>-agent`: the sandbox on that VPS)
+     - Organization role: **No Access**
+   - On the new identity, add **Universal Auth**. Set Access Token TTL and Access Token Max TTL both to `3600`. The VPS refuses a longer-lived token (`daemon/agent-token.sh`). Leave the Trusted IPs fields alone: they need a paid plan.
+   - Note the **Client ID**. Create a client secret (description `<vps-name> host`, no TTL, no max uses) and copy it to the password manager.
+   - Add to Project → project B as **Viewer**, and later each app project the agent should use (USAGE.md "Using your app's secrets"). **Never** project A: the VPS checks this on every token refresh and cuts the sandbox off if it can read project A.
 
 Now populate secrets, in their respective projects, environment `<slug>`:
 
@@ -490,7 +498,7 @@ Now populate secrets, in their respective projects, environment `<slug>`:
 
 **`coding-agent-vps-tooling` (project B):**
 
-Secret names use the **env-var form** (uppercase, underscores) — `infisical run --` exposes each fetched secret under its own name, so naming them as env vars makes the CLIs read them directly.
+Secret names use the **env-var form** (uppercase, underscores) — each shim exports its secret under its own name, so naming them as env vars makes the CLIs read them directly.
 
 | Name | Required? | Value source |
 |---|---|---|
@@ -514,17 +522,20 @@ that they have each item recorded:
 - `coding-agent-vps-tooling` Infisical project ID (project B)
 - Environment slug (lowercase, e.g. `dev`) — same for both
 - Infisical URL (the URL their browser is on — `app.infisical.com` by default, `eu.infisical.com` for EU-region accounts)
-- Universal Auth Client ID for project A's `agent-vps` identity (UUID)
-- Universal Auth Client Secret for project A's `agent-vps` identity (shown once)
+- Universal Auth Client ID for project A's `coding-agent-vps-creds` identity (UUID)
+- Universal Auth Client Secret for project A's `coding-agent-vps-creds` identity (shown once)
+- Universal Auth Client ID for the `coding-agent-vps-agent` identity (UUID)
+- Universal Auth Client Secret for the `coding-agent-vps-agent` identity (shown once)
 
 **Do not ask the user to paste any of these into the chat.** Ask
-"have you saved all six values to your password manager?" and proceed
+"have you saved all eight values to your password manager?" and proceed
 when they say yes.
 
 ### Verify
 
-Nothing to verify here; the values are tested when the daemon runs in
-Phase 6 and when the user does `infisical login` in Phase 7.
+Nothing to verify here; `bootstrap.sh` tests the values in Phase 6:
+cred-daemon logs in as `coding-agent-vps-creds`, and `agent-token.service`
+logs in as `coding-agent-vps-agent` and checks it cannot read project A.
 
 ## Phase 3: Tailscale (~5 min)
 
@@ -889,7 +900,7 @@ ssh <USER>@coding-agent-vps
 sudo bash /opt/agent-vps/scripts/bootstrap.sh
 ```
 
-Tell them the script will prompt for six values in this order. They
+Tell them the script will prompt for eight values in this order. They
 paste each value from their password manager directly into the
 prompt — **the values do not pass through you**:
 
@@ -899,12 +910,19 @@ prompt — **the values do not pass through you**:
 | 2. `coding-agent-vps-tooling` Infisical project ID | project B's project ID |
 | 3. Infisical environment slug | the slug they chose (`dev` etc.) |
 | 4. Infisical URL | their region URL |
-| 5. Client ID | project A's Universal Auth Client ID UUID |
+| 5. Client ID | `coding-agent-vps-creds` Universal Auth Client ID UUID |
 | 6. Client Secret | (hidden input — pasted from password manager) |
+| 7. Client ID of the agent identity | `coding-agent-vps-agent` Universal Auth Client ID UUID |
+| 8. Client secret | (hidden input — pasted from password manager) |
+
+Prompts 7 and 8 come from `scripts/agent-identity.sh`, which
+`bootstrap.sh` runs last. To rotate only the agent identity's client
+secret later, run that script alone.
 
 ### Verify
 
-The script ends with `✓ Credential fetch succeeded.` on success —
+The script prints `✓ Credential fetch succeeded.` and ends with
+`✓ The sandbox now reads Infisical as the agent identity.` on success —
 that's the only signal you need to surface; proceed to Phase 7.
 
 If it errors, see [USAGE.md → Troubleshooting](./USAGE.md#troubleshooting)
@@ -931,20 +949,18 @@ The user lands inside the sandbox's tmux session.
 claude login        # prints a URL; user opens it on their laptop, completes OAuth, pastes the code back
 codex login         # same flow
 gemini             # first run prompts for OAuth via Google sign-in (browser on the laptop)
-infisical login     # browser login with a localhost callback (USAGE.md "Using the sandbox cloud CLIs") — gives the sandbox access to coding-agent-vps-tooling + per-app projects
 ```
 
-All four OAuth flows are interactive and require browser access on the
-user's laptop. The first three land tokens in `~/.claude/`, `~/.codex/`,
+All three OAuth flows are interactive and require browser access on the
+user's laptop. They land tokens in `~/.claude/`, `~/.codex/`,
 and `~/.gemini/`, which are mounted on named Docker volumes
 (`sandbox-state-claude`, `sandbox-state-codex`, `sandbox-state-gemini`)
 — survive container rebuild.
 
-The `infisical login` token lands in `~/.infisical/` inside the
-container, which is **NOT** on a named volume — it's gone on
-`docker compose up -d --build`. Re-run `infisical login` after each
-container rebuild. This is intentional: the sandbox holds no
-long-lived secret material at rest.
+**Do not run `infisical login` in the sandbox.** The sandbox already
+reads Infisical as `coding-agent-vps-agent` through the host's
+`agent-token.timer`. A personal login would give the agent everything
+the user's account can read (USAGE.md "Using the sandbox cloud CLIs").
 
 ### Verify (inside the sandbox tmux)
 
@@ -955,7 +971,7 @@ codex --version               # prints a version
 hcloud server list            # via PATH shim — fetches HCLOUD_TOKEN from coding-agent-vps-tooling per-command
 ```
 
-All four should succeed. If `ssh -T` fails with "Permission denied (publickey)": the cred-daemon may not have loaded the key. Check `sudo systemctl status ssh-agent-creds.service` and `sudo systemctl status cred-daemon.service` on the VPS. If `hcloud server list` fails with an Infisical auth error: confirm `infisical login` completed and the user has access to `coding-agent-vps-tooling`.
+All four should succeed. If `ssh -T` fails with "Permission denied (publickey)": the cred-daemon may not have loaded the key. Check `sudo systemctl status ssh-agent-creds.service` and `sudo systemctl status cred-daemon.service` on the VPS. If `hcloud server list` fails with "no agent token" or an Infisical auth error: check `sudo systemctl status agent-token.service` and `sudo journalctl -u agent-token.service -n 20` on the VPS, and confirm `coding-agent-vps-agent` is a Viewer in `coding-agent-vps-tooling`.
 
 ### Verify the VPS cannot reach the laptop
 

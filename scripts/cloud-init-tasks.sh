@@ -320,6 +320,7 @@ install -d -m 0700 -o creds  -g creds  /var/lib/agent-vps/creds
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-config/env
 install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/sockets
+install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-token
 
 # Project workspace. Mode 0777 so the rootless-Docker-mapped sandbox UID
 # (host UID dev_subuid_base + 999) can write here in addition to host
@@ -546,6 +547,8 @@ install -m 0644 /opt/agent-vps/daemon/cred-daemon.service      /etc/systemd/syst
 install -m 0644 /opt/agent-vps/daemon/cred-daemon.timer        /etc/systemd/system/
 install -m 0644 /opt/agent-vps/daemon/ssh-agent-creds.service  /etc/systemd/system/
 install -m 0644 /opt/agent-vps/daemon/ssh-agent-bridge.service /etc/systemd/system/
+install -m 0644 /opt/agent-vps/daemon/agent-token.service      /etc/systemd/system/
+install -m 0644 /opt/agent-vps/daemon/agent-token.timer        /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable for next boot, then start only if not already active.
@@ -573,10 +576,12 @@ systemctl daemon-reload
 # else in flight — forcing it silently on every script re-run is worse.
 #
 # Ordering matters: ssh-agent-creds first (the bridge's socat connects
-# to its socket), bridge second, timer last. cred-daemon.service itself
+# to its socket), bridge second, timers last. cred-daemon.service itself
 # is enabled separately below (intentionally not started — the
-# bootstrap secret doesn't exist yet at cloud-init time).
-for unit in ssh-agent-creds.service ssh-agent-bridge.service cred-daemon.timer; do
+# bootstrap secret doesn't exist yet at cloud-init time). The
+# agent-token timer is harmless before bootstrap: agent-token.sh exits
+# quietly until scripts/agent-identity.sh has stored a client secret.
+for unit in ssh-agent-creds.service ssh-agent-bridge.service cred-daemon.timer agent-token.timer; do
   systemctl enable "$unit"
   systemctl is-active --quiet "$unit" || systemctl start "$unit"
 done
