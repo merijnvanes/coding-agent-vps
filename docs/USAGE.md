@@ -255,7 +255,10 @@ the host is the highest-leverage action you can take.
    your agent walk you through SETUP.md again — much shorter the
    second time since external services are already configured). Make
    sure to mint fresh credentials at each upstream service before
-   pasting them into Infisical for the new instance.
+   pasting them into Infisical for the new instance. A compromised
+   agent may have pushed to this repo: `provision.sh` refuses an
+   unsigned tip, and you should read those commits (see "Signed
+   updates") before you sign anything on top of them.
 
 ## Rebuild
 
@@ -375,14 +378,15 @@ automatically (SETUP.md Phase 5 "Sign commits").
 
 **The pull says "does not have a GPG signature" or "untrusted GPG
 signature".** The tip of `main` was not signed by you: the agent
-pushed from the sandbox, or someone edited on github.com. The VPS
+pushed from the sandbox, someone edited on github.com, or you pulled
+updates from the upstream template, which its author signed. The VPS
 keeps the old code, and so does your laptop checkout, which checks
 the same way. On your laptop, fetch and read the change before it
 touches your files; if you accept it, merge it with a signed merge
 commit and push:
 
 ```bash
-git fetch
+git fetch                                  # for template updates: git fetch upstream, and use upstream/main below
 git log --oneline HEAD..origin/main        # which commits came in
 git diff HEAD...origin/main                # everything they change, merges included
 git merge --no-verify-signatures --no-ff origin/main -m "Approve <what>" && git push
@@ -390,7 +394,16 @@ git merge --no-verify-signatures --no-ff origin/main -m "Approve <what>" && git 
 
 `--no-ff` makes the merge commit, which carries your signature, the
 new tip. That signature approves everything below it, so review
-before you merge.
+before you merge. If the merge says "Already up to date" (your
+checkout already holds those commits, say a fresh clone), the two
+review commands showed nothing. Review against the commit the VPS
+runs instead, which only verified pulls can move, and sign only after
+that:
+
+```bash
+git diff "$(ssh <user>@coding-agent-vps sudo git -C /opt/agent-vps rev-parse HEAD)" HEAD
+git commit --allow-empty -m "Approve <what>" && git push
+```
 
 **Turn it on for a VPS set up before this existed** (one time). Put
 your laptop signing key in the signers file and set the git config
@@ -413,9 +426,94 @@ sudo git -C /opt/agent-vps pull
 sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 ```
 
-**Change the signing key**: replace the line in
-`/etc/agent-vps/allowed-signers` the same way. The file may list
-several keys, one per line, while you switch.
+**New laptop.** Install Tailscale and log in to your tailnet (the
+only way into the VPS), log in to GitHub so you can push
+(`gh auth login`, which also sets up git's HTTPS credentials), and,
+if you will provision from it, install `hcloud` and load the saved
+admin token (`hcloud context create coding-agent-vps-admin`). Clone your repo and add the template as `upstream`
+(`git remote add upstream https://github.com/merijnvanes/coding-agent-vps.git`).
+Then follow SETUP.md Phase 5 "Sign commits" and stop there: its next
+part, "Run provisioning", recreates the VPS. Two additions:
+
+- **In its step 1, choose the key.** Keeping the old one is simplest:
+  copy both files of the key pair over (for example through your
+  password manager), and the VPS already trusts it.
+- **Before its step 4, trust the keys the VPS trusts.** The VPS file
+  is root-owned, so the agent cannot have changed it:
+
+  ```bash
+  ssh <user>@coding-agent-vps cat /etc/agent-vps/allowed-signers >> ~/.ssh/allowed_signers
+  ```
+
+**With a new key**, also tell the VPS and the old laptop about it, so
+both laptops work while you switch:
+
+```bash
+# on the new laptop, in the checkout: print the new key's line
+./scripts/allowed-signers-line.sh
+# on the VPS, as dev
+printf '%s\n' '<the line from above>' | sudo tee -a /etc/agent-vps/allowed-signers >/dev/null
+# on the old laptop, if it will still pull
+printf '%s\n' '<the line from above>' >> ~/.ssh/allowed_signers
+```
+
+**Retire a key** (old laptop no longer used, with its own key). If
+you copied that key to the new laptop, there is nothing to retire; to
+stop trusting it anyway, first make and admit a new key as above.
+Before you delete a key, move the VPS to a tip signed by the key you
+keep, because `cloud-init-tasks.sh` checks that `HEAD` verifies:
+
+```bash
+# on the laptop you keep
+git commit --allow-empty -m "Sign with the current key" && git push
+# on the VPS
+sudo git -C /opt/agent-vps pull
+```
+
+Then delete the old key's line from `/etc/agent-vps/allowed-signers`
+on the VPS (`sudo nano /etc/agent-vps/allowed-signers`) and from
+`~/.ssh/allowed_signers` on your laptops. Commits it signed earlier
+stay in the history; a new tip signed by it is refused.
+
+**Lost or stolen laptop.** It can log in to the VPS as you, with
+sudo, so cut that first:
+
+1. Sign out its sessions at the identity provider you log in to
+   Tailscale with (for example Google: Security, Your devices), so it
+   cannot rejoin. A Tailscale admin console session in its browser
+   lasts up to 30 days on its own and can open an SSH console, so
+   expect that route too: remove the device and any machine you do
+   not recognise from your tailnet (Tailscale admin console,
+   Machines), check that list again over the next days, and revoke the
+   Hetzner admin token and its GitHub sessions. If you think the thief
+   already got in, treat the VPS as compromised and follow "Incident
+   response"; its `hcloud` steps need a new admin token in the
+   `coding-agent-vps` project (`hcloud context create
+   coding-agent-vps-admin`), or delete the server in the Hetzner web
+   console.
+2. Delete its key's line from `/etc/agent-vps/allowed-signers` on the
+   VPS **and** from `~/.ssh/allowed_signers` on every laptop you still
+   use, so nothing pulls a commit signed with the stolen key. Any
+   device still on your tailnet can log in for this, a phone too.
+3. Get a trusted baseline: the commit the VPS runs, which only
+   verified pulls can move:
+   `ssh <user>@coding-agent-vps sudo git -C /opt/agent-vps rev-parse HEAD`.
+4. On a laptop whose signing key was **never** on the lost laptop (a
+   copied key is just as stolen): `git fetch`, then read
+   `git diff <that hash> origin/main`, everything pushed since (on
+   "bad object", the commit is gone from GitHub; diff on the VPS:
+   `sudo git -C /opt/agent-vps fetch && sudo git -C /opt/agent-vps diff HEAD origin/main`). If you
+   have no such key, set up a new key first ("New laptop", then "With
+   a new key", which adds it to the VPS); its SETUP step 4 does this
+   review.
+5. If you accept it, sign on top with the approve flow above and push.
+   On the VPS, `sudo git -C /opt/agent-vps pull`. If that says it
+   cannot fast-forward (the history was rewritten), use the verified
+   reset from "`cloud-init status` shows error" below instead.
+
+Until that pull, `cloud-init-tasks.sh` stops at its signature check
+(`HEAD` carries the removed key); the pull itself still works, since
+it checks only the incoming tip.
 
 ### Full VPS rebuild
 
@@ -426,7 +524,8 @@ For OS-level issues or just to test the flow end-to-end:
 ```
 
 The script detects an existing server with the same name and asks
-before deleting it. All local disk and Docker volumes are lost —
+before deleting it, after it has checked that the tip of `main` is
+signed by you (see "Signed updates"). All local disk and Docker volumes are lost —
 OAuth logins must be redone. Total time: ~10 min cloud-init + ~5 min
 bootstrap + OAuth.
 

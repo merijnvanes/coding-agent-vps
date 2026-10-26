@@ -142,7 +142,9 @@ Before starting, confirm the user has (or direct them to create):
 - A GitHub account.
 - ~30 min of time to complete the flow.
 - Local CLI tools on the laptop running this setup: `curl`, `jq`, `git`,
-  `gh`, `hcloud`. The "Refresh pinned versions" section below leans on
+  `gh`, `hcloud`, and Tailscale (installed and logged in to the
+  user's tailnet: Phase 3 reads the laptop's tailnet IP, and every
+  login to the VPS goes over it). The "Refresh pinned versions" section below leans on
   `curl + jq` for registry/release lookups; install via `brew install jq`
   on macOS or `apt-get install -y jq` on Debian/Ubuntu if missing.
 
@@ -153,6 +155,56 @@ Without it, the same alerts still land in `journalctl -u cred-daemon`
 on the VPS; the user just won't get a phone buzz.
 
 If anything is missing, pause and have them sign up first.
+
+## Make the repo the user's own
+
+The VPS clones this repo from the user's GitHub account and runs it as
+root, and the setup commits and pushes along the way. So `origin` must
+be a repo the user owns, with the template kept as `upstream` for
+later updates (USAGE.md "Signed updates"). In the clone, first make
+sure `gh` is logged in and git has an identity (setup commits need
+it, and the commit signing in Phase 5 uses the email):
+
+```bash
+gh auth status || gh auth login
+git config user.name  || git config user.name  "<their name>"
+git config user.email || git config user.email "<their GitHub email>"
+```
+
+If `origin` already is a repo the user owns (they started from their
+own copy), keep it and only add the template:
+`git remote add upstream https://github.com/merijnvanes/coding-agent-vps.git`.
+Otherwise, from a clone of the template:
+
+```bash
+gh repo fork --remote          # public fork: origin = the user's fork, upstream = the template
+```
+
+For a private copy instead (`provision.sh` then sets up a read-only
+deploy key):
+
+```bash
+git remote rename origin upstream
+gh repo create <name> --private --source=. --remote=origin --push
+```
+
+Then make `main` track the user's repo, so a plain `git push` goes
+there (`gh repo fork --remote` leaves it tracking the template):
+
+```bash
+git push -u origin main
+```
+
+Check: `git remote -v` shows `origin` at the user's account and
+`upstream` at the template.
+
+A copy made with GitHub's "Use this template" button starts with one
+commit and no shared history, so the update flow in USAGE.md "Signed
+updates" cannot merge template changes into it. If `origin` is such a
+copy and the user has not changed it, start over from a clone of the
+template with the fork step above (the copy holds only that one
+commit, so nothing is lost). Otherwise template updates have to be
+ported by hand.
 
 ## Choose the user's shell username
 
@@ -693,36 +745,88 @@ tailnet, built the sandbox image, and installed systemd units.
 
 The VPS runs this repo as root and pulls only commits signed by the
 user's laptop signing key (see ARCHITECTURE.md "Only signed commits
-reach root"). Turn on SSH signing in this checkout, with an existing
-SSH key of the user's that is **not** the `coding-agent-vps` key from
-Phase 4 (that one lives on the VPS):
+reach root"). The same steps set up a later laptop (USAGE.md "New
+laptop"). Git needs `user.email` set ("Make the repo the user's own").
+Run no repo script until step 4 has passed.
 
-```bash
-git config gpg.format ssh
-git config user.signingkey ~/.ssh/<laptop-key>.pub
-git config commit.gpgsign true
-```
+1. **Key.** Use an SSH key that stays on the laptop. Any existing key
+   of the user's works (`ls ~/.ssh/*.pub`), except the
+   `coding-agent-vps` key from Phase 4, which lives on the VPS. On a
+   later laptop, copy the old laptop's signing key pair over **now**
+   if the user wants to keep it. If there is no key, make one; ask
+   the user whether they want a passphrase (without one, anything
+   running as the user on the laptop can sign):
 
-`provision.sh` runs from this checkout, so it must hold only commits
-the user signed or reviewed. Make pulls here check signatures too,
-against a key file outside the repo:
+   ```bash
+   install -d -m 0700 ~/.ssh
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_signing -C "commit signing"
+   ```
 
-```bash
-./scripts/allowed-signers-line.sh >> ~/.ssh/allowed_signers
-git config gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
-git config merge.verifySignatures true
-git config pull.rebase false
-git config pull.ff only            # a rebasing pull (even from branch.main.rebase) would skip the check
-git config gpg.openpgp.program false
-git config gpg.x509.program false
-```
+2. **Sign.** Point git at the **private** key file, so signing works
+   without an ssh-agent:
+
+   ```bash
+   KEY=~/.ssh/id_ed25519_signing      # or the key chosen in step 1
+   git config gpg.format ssh
+   git config user.signingkey "$KEY"
+   git config commit.gpgsign true
+   ```
+
+3. **Check incoming commits.** `provision.sh` runs from this checkout,
+   so it must hold only commits the user signed or reviewed. Make
+   pulls here check signatures too, against a key file outside the
+   repo:
+
+   ```bash
+   echo "$(git config user.email) namespaces=\"git\" $(cut -d' ' -f1,2 "$(git config --type=path user.signingkey).pub")" >> ~/.ssh/allowed_signers
+   git config gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+   git config merge.verifySignatures true
+   git config pull.rebase false
+   git config pull.ff only            # a rebasing pull (even from branch.main.rebase) would skip the check
+   git config gpg.openpgp.program false
+   git config gpg.x509.program false
+   ```
+
+4. **Check the checkout itself.** A fresh clone was not checked. Go
+   by the exit status: git prints `Good "git" signature` even for a
+   key it does not trust.
+
+   ```bash
+   git verify-commit HEAD && echo VERIFIED
+   ```
+
+   - `VERIFIED`: done.
+   - **A later laptop, and no `VERIFIED`:** someone pushed after the
+     last commit the user approved, maybe the agent. The commit the
+     VPS runs is a trusted baseline, since only verified pulls move
+     it: `ssh <user>@coding-agent-vps sudo git -C /opt/agent-vps rev-parse HEAD`.
+     Show the user `git diff <that hash> HEAD` (if git says "bad
+     object", that commit is gone from GitHub, say after a force-push;
+     diff on the VPS instead: `sudo git -C /opt/agent-vps fetch` then
+     `sudo git -C /opt/agent-vps diff HEAD origin/main`; after signing,
+     update the VPS with the verified reset in USAGE.md "`cloud-init
+     status` shows error", since a plain pull cannot fast-forward) and
+     continue only if they accept every change; then sign it:
+     `git commit --allow-empty -m "Approve <what>" && git push`.
+   - **A later laptop with a new key:** `provision.sh` accepts only a
+     tip signed by this laptop's key, even if `VERIFIED` came from the
+     old one. Once the VPS trusts the new key (USAGE.md "New laptop"),
+     make that tip: `git commit --allow-empty -m "Sign with the new key" && git push`.
+   - **A first setup, and it fails:** expected. The tip of a fresh
+     copy is unsigned or signed by the template's author, and
+     `provision.sh` stops unless it is signed by this key. Adopting
+     the template is the user's call; then sign the tip:
+
+     ```bash
+     git commit --allow-empty -m "Sign the tip" && git push
+     ```
 
 From now on every commit here is signed, and a pull refuses a tip the
 user did not sign (USAGE.md "Signed updates" has the review flow). A
 pull also refuses when local and remote commits have diverged; then
-`git fetch && git merge origin/main` merges a signed remote tip. If origin's tip is not
-signed yet, make a signed commit (`git commit --allow-empty -m "Sign
-the tip"` will do) and push it, or `provision.sh` stops.
+`git fetch && git merge origin/main` merges a signed remote tip.
+
+### Run provisioning
 
 Run provisioning:
 
