@@ -198,7 +198,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 
 1. **Generate fresh Tailscale auth-key** from Tailscale admin UI (single-use, ≤24h TTL).
 2. **Provision** (against the `coding-agent-vps` Hetzner project): `hcloud server create --firewall=agent-vps-deny-all ...` (firewall pre-created with v4+v6 deny-all inbound rules, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key and the resolved clone URL (HTTPS for public repos, SSH-with-deploy-key for private). Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), enables ufw (`ufw default deny incoming` covers both v4 and v6), clones the configured `GH_REPO` (auto-detected from the local `origin` remote at provision time) into `/opt/agent-vps/`, stops unless the cloned tip is signed by the owner's laptop signing key (passed in the user-data), builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Secrets Hetzner sees in user-data: the ephemeral Tailscale auth-key (single-use, short TTL) and — for private repos only — a read-only single-repo deploy key. Both acceptable since Hetzner is in §2's trusted-dependency set.
-3. **SSH in** from laptop via Tailscale.
+3. **SSH in** from laptop via Tailscale. The new server has a new public IP: if a provider token in `coding-agent-vps-tooling` is IP-locked (the Cloudflare token, SETUP.md Phase 2), change its allowed address to `hcloud server ip coding-agent-vps`.
 4. **Paste — both Infisical Universal Auth client secrets** through `bootstrap.sh`: cred-daemon's into `/etc/agent-vps/infisical-uauth` and the sandbox identity's into `/etc/agent-vps/infisical-agent-uauth` (both 0600 creds:creds).
 5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`. **agent-token.service** writes the first sandbox token.
 6. **Sandbox container starts**. The named volumes `sandbox-state-claude` and `sandbox-state-codex` are created (if first-ever bootstrap) or attached (if reusing previous state — the case after a container rebuild that doesn't destroy the VPS).
@@ -206,7 +206,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 8. **`claude login`** + **`codex login`** — only required on first-ever bootstrap or if the named volumes were wiped (i.e., full VPS rebuild). On container rebuilds, refresh tokens persist in the named volumes and the agents are already authenticated.
 9. **tmux detach**, agent is ready.
 
-**Manual touchpoints**: 1 `bootstrap.sh` run (two Universal Auth client IDs + client secrets) + (first time only) 2 interactive OAuth logins. Roughly 2 minutes if the named volumes survive; 3–4 minutes if first-ever bootstrap.
+**Manual touchpoints**: 1 `bootstrap.sh` run (two Universal Auth client IDs + client secrets) + the IP filter of each IP-locked provider token + (first time only) 2 interactive OAuth logins. Roughly 2 minutes if the named volumes survive; 3–4 minutes if first-ever bootstrap.
 
 ## File layout on VPS
 

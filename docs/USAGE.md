@@ -47,13 +47,15 @@ for the failure mode this prevents.
 
 `hcloud`, `wrangler`, `gcloud`, `supabase` and `seo` are wrapped by PATH shims at `/opt/agent-vps-wrappers/`. Each shim fetches only its own token from the `coding-agent-vps-tooling` Infisical project at command-time and injects it into the subprocess environment for that one invocation. The token never persists on disk inside the sandbox.
 
+Only the VPS uses `coding-agent-vps-tooling`, so its tokens can be made for the VPS: narrow scopes, and where the provider allows it, locked to the VPS's IP (SETUP.md Phase 2). Keep your laptop's wider tokens in a separate project that `<vps-name>-agent` is not a member of.
+
 The sandbox reads Infisical as its own machine identity, `<vps-name>-agent`, never as you. Nothing to log in to: the host refreshes a 1-hour access token for that identity every 20 minutes (`agent-token.timer`), and the `infisical` shim hands it to every Infisical call. The identity's client secret stays on the host, so a token copied out of the sandbox stops working within the hour. **Never run `infisical login` in the sandbox.** That would put your own account, with everything it can reach, back in the agent's hands.
 
 Use the CLIs normally:
 
 ```bash
 hcloud server list                        # HCLOUD_TOKEN fetched per-command, in env for one subprocess
-wrangler deploy                           # CLOUDFLARE_API_TOKEN, same pattern
+wrangler tail <worker>                    # CLOUDFLARE_API_TOKEN, same pattern (deploy needs Workers Scripts Edit, SETUP.md Phase 2)
 supabase db push                          # SUPABASE_ACCESS_TOKEN, same pattern
 gcloud auth list                          # GCP SA JSON, written to /dev/shm temp file, deleted on exit
 ```
@@ -548,6 +550,11 @@ before deleting it, after it has checked that the tip of `main` is
 signed by you (see "Signed updates"). All local disk and Docker volumes are lost —
 OAuth logins must be redone. Total time: ~10 min cloud-init + ~5 min
 bootstrap + OAuth.
+
+The new server gets a new public IP. Change the Cloudflare token's
+Client IP Address Filtering to the address `hcloud server ip
+coding-agent-vps` prints (SETUP.md Phase 5 "Verify"); until then,
+`wrangler` in the sandbox gets "Authentication error".
 
 To survive a full VPS rebuild without redoing OAuth, you'd need a
 separately-attached Hetzner Cloud volume — not in v1 scope (see

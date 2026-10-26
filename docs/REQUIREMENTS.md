@@ -11,7 +11,7 @@ The goal: **move the agent off my laptop and into a tightly-scoped sandbox on a 
 **Key design principles:**
 
 - **Security boundary is the sandbox, not per-action approval.** Inside the box: agent runs freely, no prompts. Outside the box: hard limits the agent cannot bypass.
-- **The VPS hardens credential *storage and access*, not credential *usage*.** What the agent can do once authenticated matches the laptop's experience. The whole project derisks creds at rest and in transit — not at the moment of action. Anything that would narrow what the agent does once authenticated (egress filtering, per-project token scoping, deploy gates, command allowlists) is out of scope by definition.
+- **The VPS hardens credential *storage and access*, not credential *usage*.** What the agent can do once authenticated matches the laptop's experience. The whole project derisks creds at rest and in transit — not at the moment of action. Anything that would narrow what the agent does once authenticated (egress filtering, per-project token scoping, deploy gates, command allowlists) is out of scope by definition. One exception sits outside the code: the owner may give the VPS its own provider tokens, narrower than the laptop's and locked to the VPS's IP where the provider allows it, in a tooling project only the VPS reads (SETUP.md Phase 2). The project builds no enforcement for this; the provider enforces it.
 
 ## 2. Threat model
 

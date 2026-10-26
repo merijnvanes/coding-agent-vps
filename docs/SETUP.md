@@ -478,6 +478,7 @@ workloads project.
 3. **Create project B: `coding-agent-vps-tooling`** — sandbox-side, holds account-wide cloud-CLI tokens.
    - Note the **Project ID**. This is `INFISICAL_TOOLING_PROJECT_ID` later.
    - Same environment slug as project A.
+   - Only this VPS uses project B. The agent can read every secret in it (Viewer reads the whole project), so it holds tokens made for the VPS, as narrow as the agent's work allows. If the user's laptop agents keep wider tokens in Infisical, those go in a separate project the VPS identity is not a member of (e.g. `laptop-tooling`).
 
 4. **Identity for the sandbox: `coding-agent-vps-agent`.** The sandbox reads Infisical as this machine identity, never as the user. The user's own account is an organization Admin and can read every project, the raw GitHub key in project A included, so it must never be logged in inside the sandbox.
    - Organization → Access Control → Machine Identities → Create:
@@ -503,9 +504,17 @@ Secret names use the **env-var form** (uppercase, underscores) — each shim exp
 | Name | Required? | Value source |
 |---|---|---|
 | `HCLOUD_TOKEN` | Yes | The apps-project token from Phase 1 step 4 |
-| `CLOUDFLARE_API_TOKEN` | If they use Cloudflare | Cloudflare → My Profile → API Tokens |
+| `CLOUDFLARE_API_TOKEN` | If they use Cloudflare | Cloudflare → My Profile → API Tokens → Create Custom Token, made for this VPS (see below) |
 | `GCP_SA_KEY_JSON` | If they use GCP | Existing service-account key JSON, entire content (single multi-line value) |
 | `SUPABASE_ACCESS_TOKEN` | If they use Supabase | Supabase dashboard → Account → Access Tokens |
+
+The Cloudflare token for the VPS:
+
+- Name: `<vps-name>-agent`.
+- Permissions, if the user's sites deploy on push (the agent reads, never deploys): Account → Workers Scripts → Read, Account → Workers Tail → Read, Account → Account Settings → Read, User → Memberships → Read. If the agent must run `wrangler deploy`, Workers Scripts → Edit. Add other permissions (D1, KV, R2, DNS) only when an app needs them.
+- Account Resources: Include → the user's account only. No zone permissions unless an app needs them.
+- Client IP Address Filtering: the VPS does not exist yet, so leave it empty now. Phase 5 "Verify" adds the VPS's public IPv4. A copy of the token then fails from any other address.
+- Expiration: none. The IP filter already stops a leaked copy.
 
 Tell the user: skip secrets they don't need. The PATH shims silently fall through to "command not found" if a token isn't populated; they can add more later by populating the secret in Infisical — no daemon restart needed (sandbox-side secrets are fetched per-command).
 
@@ -884,6 +893,8 @@ ssh <USER>@coding-agent-vps \
   'systemctl is-enabled cred-daemon.service ssh-agent-creds.service ssh-agent-bridge.service'
 # All three should print `enabled`.
 ```
+
+If the user made a Cloudflare token in Phase 2, have them lock it to the VPS now: Cloudflare → My Profile → API Tokens → the `<vps-name>-agent` token → Edit → Client IP Address Filtering → Allow → the address that `hcloud server ip coding-agent-vps` prints. The sandbox has no IPv6 egress, so the IPv4 address is enough.
 
 ## Phase 6: Bootstrap Infisical on the VPS (~3 min, interactive)
 
