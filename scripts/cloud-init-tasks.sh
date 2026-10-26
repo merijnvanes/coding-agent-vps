@@ -11,6 +11,7 @@
 #   2b. Turn host OpenSSH off and lock root's password (Tailscale SSH
 #       is the only way in)
 #   2c. Block dev and the sandbox from the cloud metadata service
+#   2d. Make /opt/agent-vps pull only commits the owner signed
 #   3. Pre-create the on-disk directory tree with correct ownership/modes
 #   4. Configure subuid/subgid for dev (default range only — the
 #      previous agent-sockets-group + custom subgid trick was dropped in
@@ -269,6 +270,47 @@ if ! grep -q "skuid ${DEV_UID} ip daddr 169.254.0.0/16 reject" <<<"$metadata_rul
   exit 1
 fi
 log "metadata service blocked for dev (UID ${DEV_UID}) and the sandbox"
+
+# === 2d. Only signed commits reach root ===
+#
+# This checkout runs as root: this script, the unit files, cred-daemon.sh.
+# The sandbox pushes to GitHub with the owner's account key, so it can
+# push to this repo's main too, and the next `sudo git -C /opt/agent-vps
+# pull` would hand that push to root. So the checkout merges only a tip
+# commit that carries an SSH signature from a key listed in
+# /etc/agent-vps/allowed-signers. provision.sh writes that file (via
+# cloud-init.yaml) from the laptop's git signing key; nothing in the repo
+# writes it, so a commit cannot vouch for itself. A refused pull leaves
+# the old code in place. cloud-init.yaml sets the same config right
+# after the clone; this step re-asserts it on every run.
+#
+# git checks the tip only: signing a commit on top of someone else's
+# approves everything below it.
+#
+# pull.rebase=false and pull.ff=only are set here because
+# merge.verifySignatures applies to merges only; a pull that rebases
+# (say, from root's global config) would skip the check. git picks the
+# verifier from the signature itself, so the OpenPGP and X.509 verifiers
+# are set to `false`: only SSH signatures, checked against the signers
+# file, can pass.
+ALLOWED_SIGNERS=/etc/agent-vps/allowed-signers
+if [[ ! -s $ALLOWED_SIGNERS ]]; then
+  log "ERROR: $ALLOWED_SIGNERS is missing or empty (see docs/USAGE.md \"Signed updates\")"
+  exit 1
+fi
+git -C /opt/agent-vps config gpg.ssh.allowedSignersFile "$ALLOWED_SIGNERS"
+git -C /opt/agent-vps config merge.verifySignatures true
+git -C /opt/agent-vps config pull.rebase false
+git -C /opt/agent-vps config pull.ff only
+git -C /opt/agent-vps config gpg.openpgp.program false
+git -C /opt/agent-vps config gpg.x509.program false
+# Catches a checkout moved without a pull (reset, checkout) and a
+# signers file that does not match the key the owner signs with.
+if ! git -C /opt/agent-vps verify-commit HEAD 2>/dev/null; then
+  log "ERROR: /opt/agent-vps HEAD $(git -C /opt/agent-vps rev-parse --short HEAD) has no valid signature from a key in $ALLOWED_SIGNERS"
+  exit 1
+fi
+log "/opt/agent-vps pulls only commits signed by a key in $ALLOWED_SIGNERS"
 
 # === 3. Directory tree ===
 

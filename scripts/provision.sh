@@ -62,17 +62,6 @@ fi
 hcloud context use "$CONTEXT" \
   || { echo "ERROR: hcloud context '$CONTEXT' not found. Run: hcloud context create $CONTEXT" >&2; exit 1; }
 
-# Confirm before destroying any existing server with the same name
-if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
-  echo "WARNING: A server named '$SERVER_NAME' already exists in this project."
-  read -rp "Delete and recreate? (yes/N): " confirm
-  if [[ "$confirm" == "yes" ]]; then
-    hcloud server delete "$SERVER_NAME"
-  else
-    echo "Aborted." >&2; exit 1
-  fi
-fi
-
 # Detect whether the repo is public or private — drives the clone strategy.
 # Public: cloud-init clones via HTTPS, no auth, no deploy key needed.
 # Private: cloud-init clones via SSH using a read-only deploy key registered
@@ -148,6 +137,39 @@ if [[ "$REPO_VISIBILITY" == "private" ]]; then
   DEPLOY_KEY_B64=$(base64 < "$DEPLOY_KEY_PATH" | tr -d '\n')
 fi
 
+# The VPS pulls only commits signed by this laptop's git signing key
+# (scripts/cloud-init-tasks.sh step 2d); this line becomes its
+# /etc/agent-vps/allowed-signers. This script and the helper run from
+# the working tree, so the laptop checkout is trusted: with the laptop
+# git config from docs/SETUP.md Phase 5 "Sign commits", unsigned commits
+# land in it only after you review them.
+ALLOWED_SIGNERS=$(./scripts/allowed-signers-line.sh)
+
+# Fail here, not ten minutes into cloud-init: the tip cloud-init will
+# clone must carry that signature, or the VPS stops before setup. Fetch
+# it the way cloud-init will (a private repo through the deploy key).
+# The cloud-init template sent below comes from this same verified
+# commit, never from the working tree. gpg.openpgp/x509.program=false:
+# git picks the verifier from the signature, so only SSH signatures may
+# count.
+if [[ "$REPO_VISIBILITY" == "private" ]]; then
+  GIT_SSH_COMMAND="ssh -i $(printf '%q' "$DEPLOY_KEY_PATH") -o IdentitiesOnly=yes" git fetch -q "$CLONE_URL" HEAD
+else
+  git fetch -q "$CLONE_URL" HEAD
+fi
+REMOTE_TIP=$(git rev-parse FETCH_HEAD)
+SIGNERS_TMP=$(mktemp)
+printf '%s\n' "$ALLOWED_SIGNERS" > "$SIGNERS_TMP"
+if ! git -c gpg.ssh.allowedSignersFile="$SIGNERS_TMP" -c gpg.openpgp.program=false -c gpg.x509.program=false \
+       verify-commit "$REMOTE_TIP" 2>/dev/null; then
+  rm -f "$SIGNERS_TMP"
+  echo "ERROR: the tip of ${GH_REPO} (${REMOTE_TIP:0:7}) is not signed by your git signing key." >&2
+  echo "Cloud-init would stop before setup. Commit (signed) and push, then rerun." >&2
+  exit 1
+fi
+rm -f "$SIGNERS_TMP"
+echo "✓ the tip of ${GH_REPO} (${REMOTE_TIP:0:7}) is signed by your git signing key"
+
 # Prompt for Tailscale auth-key (single-use, ≤24h TTL — generate fresh)
 echo
 echo "Generate a fresh Tailscale auth-key:"
@@ -163,10 +185,27 @@ echo
 # never used because the HTTPS clone needs no auth).
 USER_DATA=$(mktemp)
 trap 'rm -f "$USER_DATA"' EXIT
-sed -e "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" \
-    -e "s|__DEPLOY_KEY_B64__|${DEPLOY_KEY_B64}|g" \
-    -e "s|__CLONE_URL__|${CLONE_URL}|g" \
-    cloud-init.yaml > "$USER_DATA"
+# The signer line holds an email address, which may contain sed's
+# replacement metacharacters.
+ALLOWED_SIGNERS_SED=$(printf '%s' "$ALLOWED_SIGNERS" | sed 's/[\\|&]/\\&/g')
+git show "${REMOTE_TIP}:cloud-init.yaml" \
+  | sed -e "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" \
+        -e "s|__DEPLOY_KEY_B64__|${DEPLOY_KEY_B64}|g" \
+        -e "s|__CLONE_URL__|${CLONE_URL}|g" \
+        -e "s|__ALLOWED_SIGNERS__|${ALLOWED_SIGNERS_SED}|g" \
+  > "$USER_DATA"
+
+# Confirm before destroying any existing server with the same name. Last
+# of all, so a failed check above never leaves you without a VPS.
+if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
+  echo "WARNING: A server named '$SERVER_NAME' already exists in this project."
+  read -rp "Delete and recreate? (yes/N): " confirm
+  if [[ "$confirm" == "yes" ]]; then
+    hcloud server delete "$SERVER_NAME"
+  else
+    echo "Aborted." >&2; exit 1
+  fi
+fi
 
 echo "Provisioning $SERVER_NAME (type=$TYPE, location=$LOCATION, firewall=$FIREWALL)..."
 hcloud server create \

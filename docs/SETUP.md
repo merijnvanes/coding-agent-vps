@@ -689,6 +689,41 @@ tailnet, built the sandbox image, and installed systemd units.
   gh auth status || gh auth login
   ```
 
+### Sign commits
+
+The VPS runs this repo as root and pulls only commits signed by the
+user's laptop signing key (see ARCHITECTURE.md "Only signed commits
+reach root"). Turn on SSH signing in this checkout, with an existing
+SSH key of the user's that is **not** the `coding-agent-vps` key from
+Phase 4 (that one lives on the VPS):
+
+```bash
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/<laptop-key>.pub
+git config commit.gpgsign true
+```
+
+`provision.sh` runs from this checkout, so it must hold only commits
+the user signed or reviewed. Make pulls here check signatures too,
+against a key file outside the repo:
+
+```bash
+./scripts/allowed-signers-line.sh >> ~/.ssh/allowed_signers
+git config gpg.ssh.allowedSignersFile ~/.ssh/allowed_signers
+git config merge.verifySignatures true
+git config pull.rebase false
+git config pull.ff only            # a rebasing pull (even from branch.main.rebase) would skip the check
+git config gpg.openpgp.program false
+git config gpg.x509.program false
+```
+
+From now on every commit here is signed, and a pull refuses a tip the
+user did not sign (USAGE.md "Signed updates" has the review flow). A
+pull also refuses when local and remote commits have diverged; then
+`git fetch && git merge origin/main` merges a signed remote tip. If origin's tip is not
+signed yet, make a signed commit (`git commit --allow-empty -m "Sign
+the tip"` will do) and push it, or `provision.sh` stops.
+
 Run provisioning:
 
 ```bash
@@ -697,16 +732,19 @@ Run provisioning:
 
 The script will:
 1. Detect repo visibility (public/private) and pick the clone strategy.
-2. **For private repos only**: generate (if missing) a read-only ed25519
+2. Check that origin's tip is signed by the signing key above, and put
+   that key into the cloud-init user-data as the VPS's only trusted
+   signer.
+3. **For private repos only**: generate (if missing) a read-only ed25519
    deploy key at `~/.ssh/coding-agent-vps-deploy` and register it on
    the repo via `gh api` (idempotent).
-3. Prompt for the Tailscale auth-key. The **user** pastes it
+4. Prompt for the Tailscale auth-key. The **user** pastes it
    directly into the `provision.sh` prompt (input is hidden — the
    key never reaches the chat with you).
-4. Warn if the local checkout has unpushed commits or working-tree
+5. Warn if the local checkout has unpushed commits or working-tree
    changes (cloud-init clones from origin, so local-only changes
    wouldn't reach the VPS).
-5. Create the Hetzner CX23 VPS with the deny-all firewall attached at
+6. Create the Hetzner CX23 VPS with the deny-all firewall attached at
    creation time.
 
 After `provision.sh` returns, cloud-init runs in the background for

@@ -44,6 +44,11 @@ the canonical version. Briefly:
   OpenSSH is masked and root's password is locked; Tailscale SSH is
   the only login path. This matters because the sandbox reaches the
   host's own addresses over loopback, past both firewalls.
+- A compromised agent cannot get code run as root on the host by
+  pushing to this repo. The VPS checkout (`/opt/agent-vps`, which runs
+  as root) pulls only commits signed by the owner's laptop signing key,
+  and cloud-init checks the same signature before the first setup run.
+  The trusted key lives in a root-owned file the repo never writes.
 
 **Out of scope / explicit residuals**:
 - A compromised agent **can** exfiltrate any credential the cred-
@@ -56,9 +61,10 @@ the canonical version. Briefly:
 - A compromised agent **can** push to any GitHub repo the user has
   write access to (the SSH key acts as the user). The architecture
   doesn't currently distinguish "agent-managed repos" from "user's
-  personal repos" — the SSH key is one identity. Mitigation: review
-  diffs before pushing, especially to the coding-agent-vps repo
-  itself.
+  personal repos" — the SSH key is one identity. For this repo, the
+  push cannot reach root on the VPS (see above), but it still lands on
+  GitHub, so review the agent's commits before you sign a commit on
+  top of them: signing the tip approves everything below it.
 - Hetzner Cloud, Infisical, Tailscale, GitHub, and the Anthropic /
   OpenAI OAuth providers are **trusted dependencies**. A compromise
   at any of these vendors is out of the threat model.

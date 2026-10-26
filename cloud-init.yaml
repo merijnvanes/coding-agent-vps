@@ -16,6 +16,9 @@
 #                           so the write_files block stays valid; the
 #                           resulting file is unused (HTTPS clone needs
 #                           no auth).
+#   __ALLOWED_SIGNERS__     allowed-signers line for the laptop's git
+#                           signing key (see scripts/cloud-init-tasks.sh
+#                           step 2d)
 # Hetzner is the only third party that ever sees these — acceptable since
 # Hetzner is in the trusted-dependency set (docs/REQUIREMENTS.md §2).
 
@@ -89,6 +92,16 @@ write_files:
     content: |
       github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
 
+  # The key the owner signs commits with. The clone below and every later
+  # pull must have a tip signed by it (scripts/cloud-init-tasks.sh step 2d).
+  # It comes from the laptop, not the repo, so a pushed commit cannot
+  # change it.
+  - path: /etc/agent-vps/allowed-signers
+    permissions: '0644'
+    owner: root:root
+    content: |
+      __ALLOWED_SIGNERS__
+
 runcmd:
   # 1. UFW: deny incoming on every interface except tailscale0. Hetzner Cloud
   #    firewall is already deny-all from server creation (attached via
@@ -119,9 +132,20 @@ runcmd:
 
   # 3. Tighten /root/.ssh dir mode (write_files creates parent dirs but
   #    doesn't enforce mode), then clone over SSH using the deploy key.
+  #    The checkout pulls only owner-signed commits from here on, even if
+  #    setup fails halfway (scripts/cloud-init-tasks.sh step 2d re-asserts
+  #    this). The clone has no working tree until its tip verifies, so a
+  #    rejected tip leaves no file a recovery step could run; runcmd does
+  #    not stop on a failed line, hence &&.
   - chmod 0700 /root/.ssh
   - mkdir -p /opt/agent-vps
-  - git clone __CLONE_URL__ /opt/agent-vps
-  - bash /opt/agent-vps/scripts/cloud-init-tasks.sh
+  - git clone --no-checkout __CLONE_URL__ /opt/agent-vps
+  - git -C /opt/agent-vps config gpg.ssh.allowedSignersFile /etc/agent-vps/allowed-signers
+  - git -C /opt/agent-vps config merge.verifySignatures true
+  - git -C /opt/agent-vps config pull.rebase false
+  - git -C /opt/agent-vps config pull.ff only
+  - git -C /opt/agent-vps config gpg.openpgp.program false
+  - git -C /opt/agent-vps config gpg.x509.program false
+  - git -C /opt/agent-vps verify-commit HEAD && git -C /opt/agent-vps reset -q --hard && bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 
 final_message: "Cloud-init complete. SSH in via Tailscale and run: sudo bash /opt/agent-vps/scripts/bootstrap.sh"

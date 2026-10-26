@@ -349,6 +349,9 @@ sudo git -C /opt/agent-vps pull
 sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
 ```
 
+The pull merges only a tip commit you signed; see "Signed updates"
+below if it refuses.
+
 The script leaves services that already run alone, so a change to
 `daemon/ssh-agent-creds.service` or `daemon/ssh-agent-bridge.service`
 takes effect only after a restart. The agent loads the cached GitHub
@@ -362,6 +365,57 @@ docker exec sandbox ssh -T git@github.com   # as dev: expect "Hi <github-usernam
 If that says "Permission denied (publickey)", the cached key is
 missing or stale: `sudo systemctl start cred-daemon.service` fetches
 it from Infisical and loads it.
+
+### Signed updates
+
+`/opt/agent-vps` merges only a tip commit signed by a key in
+`/etc/agent-vps/allowed-signers` (ARCHITECTURE.md "Only signed commits
+reach root"). Commits you make in your laptop checkout are signed
+automatically (SETUP.md Phase 5 "Sign commits").
+
+**The pull says "does not have a GPG signature" or "untrusted GPG
+signature".** The tip of `main` was not signed by you: the agent
+pushed from the sandbox, or someone edited on github.com. The VPS
+keeps the old code, and so does your laptop checkout, which checks
+the same way. On your laptop, fetch and read the change before it
+touches your files; if you accept it, merge it with a signed merge
+commit and push:
+
+```bash
+git fetch
+git log --oneline HEAD..origin/main        # which commits came in
+git diff HEAD...origin/main                # everything they change, merges included
+git merge --no-verify-signatures --no-ff origin/main -m "Approve <what>" && git push
+```
+
+`--no-ff` makes the merge commit, which carries your signature, the
+new tip. That signature approves everything below it, so review
+before you merge.
+
+**Turn it on for a VPS set up before this existed** (one time). Put
+your laptop signing key in the signers file and set the git config
+before the first pull, so that pull is checked too:
+
+```bash
+# on the laptop, in this checkout: print the line to paste
+./scripts/allowed-signers-line.sh
+# on the VPS, as dev
+sudo install -m 0644 /dev/stdin /etc/agent-vps/allowed-signers <<'EOF'
+<the line from above>
+EOF
+sudo git -C /opt/agent-vps config gpg.ssh.allowedSignersFile /etc/agent-vps/allowed-signers
+sudo git -C /opt/agent-vps config merge.verifySignatures true
+sudo git -C /opt/agent-vps config pull.rebase false
+sudo git -C /opt/agent-vps config pull.ff only
+sudo git -C /opt/agent-vps config gpg.openpgp.program false
+sudo git -C /opt/agent-vps config gpg.x509.program false
+sudo git -C /opt/agent-vps pull
+sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh
+```
+
+**Change the signing key**: replace the line in
+`/etc/agent-vps/allowed-signers` the same way. The file may list
+several keys, one per line, while you switch.
 
 ### Full VPS rebuild
 
@@ -540,12 +594,25 @@ step.
 ### `cloud-init status` shows `error`
 
 Cloud-init aborted at some script step. After fixing whatever went
-wrong, the safest recovery is:
+wrong (and pushing a signed commit, if the fix is upstream), the
+safest recovery is:
 
 ```bash
-sudo git -C /opt/agent-vps pull                          # if the fix is upstream
-sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh     # idempotent
+sudo git -C /opt/agent-vps fetch
+sudo git -C /opt/agent-vps verify-commit origin/main \
+  && sudo git -C /opt/agent-vps reset -q --hard origin/main \
+  && sudo bash /opt/agent-vps/scripts/cloud-init-tasks.sh   # idempotent
 ```
+
+`verify-commit` runs before any repo file does, so this recovery never
+runs a tip you did not sign.
+
+**The VPS joined the tailnet, but `ssh <user>@coding-agent-vps` says
+the user does not exist.** Most likely cloud-init stopped at the
+signature check: the tip of `main` was not signed when the VPS cloned
+it (someone pushed after `provision.sh` checked). Nothing was set up,
+so there is no user to log in as and nothing on disk to run. Sign the
+tip (see "Signed updates") and run `provision.sh` again.
 
 You don't need to destroy and reprovision unless the failure was in
 `cloud-init.yaml` itself (Tailscale join, git clone) — `cloud-init-tasks.sh`

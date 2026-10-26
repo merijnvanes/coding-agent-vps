@@ -112,6 +112,8 @@ Ingress is blocked at three deny-by-default layers, configured during cloud-init
 
 **No metadata service for the sandbox.** Hetzner's metadata service (`169.254.169.254`, and `fe80::a9fe:a9fe` on private networks) serves the server's user-data, which holds the cloud-init secrets listed under "Rebuild flow" below. Egress is otherwise open, so `daemon/sandbox-metadata-block.nft` rejects traffic from dev's UID to `169.254.0.0/16` and `fe80::/10`. Rootless Docker sends all container traffic through `slirp4netns`, which runs as dev, so the rules cover the sandbox; root's cloud-init and qemu-guest-agent keep access. The rules live in their own nftables table, loaded at boot by `sandbox-metadata-block.service` before networking and before dev's user manager. ufw never touches that table, so a `ufw reload` cannot open a gap. `scripts/cloud-init-tasks.sh` step 2c installs it and checks that the rules are live.
 
+**Only signed commits reach root.** `/opt/agent-vps` runs as root (the setup script, the unit files, `cred-daemon.sh`), and the sandbox can push to this repo with the owner's GitHub key. So the checkout sets `merge.verifySignatures`: a `git pull` merges only a tip commit with an SSH signature from a key in `/etc/agent-vps/allowed-signers`, and refuses anything else, leaving the old code in place. `pull.rebase=false` and `pull.ff=only` are set too, because the check applies to merges only, and the OpenPGP and X.509 verifiers are set to `false`, because git picks the verifier from the signature and only the SSH one reads the signers file. `provision.sh` builds the signers file from the laptop's git signing key (git config, not a repo file, via `scripts/allowed-signers-line.sh`) and passes it in the cloud-init user-data; cloud-init sets the git config right after the clone and verifies the cloned tip before it runs `cloud-init-tasks.sh`. Step 2d of that script sets the git config and checks that `HEAD` verifies. git checks the tip only, so signing a commit on top of the agent's work approves that work. The clone has no working tree until the tip verifies, so a rejected first clone leaves nothing to run. The laptop checkout is the root of trust for provisioning (`provision.sh` and the helper run from it), so SETUP.md Phase 5 makes laptop pulls check signatures the same way: unsigned commits land there only through a reviewed `git merge --no-verify-signatures`.
+
 **IPv6 stays enabled** on the VPS (kernel and interface level). Disabling at the kernel was rejected because it causes silent failures for any service that binds to `::` and breaks IPv6-preferring DNS fallback for package mirrors. The security property we care about — "no public ingress" — is enforced at the firewall layers above, regardless of protocol.
 
 Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity), except for the metadata service above.
@@ -190,7 +192,7 @@ Rotation is immediate: change the value in Infisical → next CLI invocation pic
 Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using the admin token for the `coding-agent-vps` Hetzner project (kept in laptop's password manager; never enters the VPS).
 
 1. **Generate fresh Tailscale auth-key** from Tailscale admin UI (single-use, ≤24h TTL).
-2. **Provision** (against the `coding-agent-vps` Hetzner project): `hcloud server create --firewall=agent-vps-deny-all ...` (firewall pre-created with v4+v6 deny-all inbound rules, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key and the resolved clone URL (HTTPS for public repos, SSH-with-deploy-key for private). Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), enables ufw (`ufw default deny incoming` covers both v4 and v6), clones the configured `GH_REPO` (auto-detected from the local `origin` remote at provision time) into `/opt/agent-vps/`, builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Secrets Hetzner sees in user-data: the ephemeral Tailscale auth-key (single-use, short TTL) and — for private repos only — a read-only single-repo deploy key. Both acceptable since Hetzner is in §2's trusted-dependency set.
+2. **Provision** (against the `coding-agent-vps` Hetzner project): `hcloud server create --firewall=agent-vps-deny-all ...` (firewall pre-created with v4+v6 deny-all inbound rules, attached at server-creation — no exposure window) with cloud-init user-data containing the Tailscale auth-key and the resolved clone URL (HTTPS for public repos, SSH-with-deploy-key for private). Cloud-init runs on first boot: installs Ubuntu LTS, Tailscale, rootless Docker (incl. buildx), enables ufw (`ufw default deny incoming` covers both v4 and v6), clones the configured `GH_REPO` (auto-detected from the local `origin` remote at provision time) into `/opt/agent-vps/`, stops unless the cloned tip is signed by the owner's laptop signing key (passed in the user-data), builds the sandbox image with `docker build` from the repo's `sandbox/Dockerfile`, then runs `tailscale up --authkey=...`. Secrets Hetzner sees in user-data: the ephemeral Tailscale auth-key (single-use, short TTL) and — for private repos only — a read-only single-repo deploy key. Both acceptable since Hetzner is in §2's trusted-dependency set.
 3. **SSH in** from laptop via Tailscale.
 4. **Paste — Infisical Universal Auth client secret** into `/etc/agent-vps/infisical-uauth` (0600 creds:creds).
 5. **cred-daemon starts**, runs first fetch, populates `/var/lib/agent-vps/creds/`.
@@ -208,6 +210,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
   infisical-uauth          0600  creds:creds   # bootstrap secret for `coding-agent-vps` project (client id+secret)
   config.env               0644  root:root     # cred-daemon config (project ID, env slug, URL)
   sandbox-metadata-block.nft 0644 root:root    # nftables rules: dev/sandbox cannot reach the metadata service
+  allowed-signers          0644  root:root     # owner's commit signing key; /opt/agent-vps pulls only commits it signed
 
 /var/lib/agent-vps/
   creds/                                       # raw key material — sandbox cannot see this
@@ -222,10 +225,10 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
 
 /srv/dev/projects/                dev:dev   # mounted rw into sandbox at /work
 
-/opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time
+/opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time; pulls only owner-signed commits
   daemon/                                       # cred-daemon, ssh-agent-creds, ssh-agent-bridge, sandbox-metadata-block units
   alerts/                                       # ntfy publisher (best-effort; logs to journal regardless)
-  scripts/                                      # provision.sh (laptop), cloud-init-tasks.sh, bootstrap.sh
+  scripts/                                      # provision.sh + allowed-signers-line.sh (laptop), cloud-init-tasks.sh, bootstrap.sh
   sandbox/
     Dockerfile                                  # built on the VPS via `docker build` at cloud-init time
     entrypoint.sh                               # container entrypoint: sets SSH_AUTH_SOCK, pre-creates tmux 'main' session detached, execs sleep infinity (PID 1 stays alive independently of tmux)
