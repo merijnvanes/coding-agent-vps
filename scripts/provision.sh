@@ -85,6 +85,10 @@ git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || HAS_UP
 
 LOCAL_AHEAD=0
 if $HAS_UPSTREAM; then
+  # Compare with origin as it is now, not as of the last fetch.
+  UPSTREAM_REMOTE=$(git config "branch.$(git branch --show-current).remote" || true)
+  git fetch -q "${UPSTREAM_REMOTE:-origin}" \
+    || echo "WARNING: could not fetch ${UPSTREAM_REMOTE:-origin}; comparing with the last fetched state." >&2
   LOCAL_AHEAD=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
 fi
 WORKING_DIRTY=$(git status --porcelain 2>/dev/null | head -c1)
