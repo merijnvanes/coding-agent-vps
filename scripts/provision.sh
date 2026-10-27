@@ -212,6 +212,10 @@ if hcloud server describe "$SERVER_NAME" >/dev/null 2>&1; then
   fi
 fi
 
+# No --ssh-key, on purpose: nothing logs in over OpenSSH. Without a key,
+# Hetzner sets a root password; cloud-init.yaml turns password login off
+# from the first boot, and scripts/cloud-init-tasks.sh step 2b locks the
+# password and masks sshd. Tailscale SSH is the only way in.
 echo "Provisioning $SERVER_NAME (type=$TYPE, location=$LOCATION, firewall=$FIREWALL)..."
 hcloud server create \
   --name "$SERVER_NAME" \
