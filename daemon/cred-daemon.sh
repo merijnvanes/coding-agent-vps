@@ -204,9 +204,19 @@ if val=$(secret_value github-ssh-key) && [[ -n "$val" ]]; then
     log "new SSH key valid, swapping into agent"
     install -m 0600 "$TMP_KEY" "$CREDS_DIR/github-ssh-key"
     if [[ -S "$SSH_AGENT_SOCKET" ]]; then
-      SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add -D 2>/dev/null || true
-      SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add "$CREDS_DIR/github-ssh-key" \
-        || alert "cred-daemon" "ssh-add failed for new github-ssh-key"
+      # Load the new key first, then remove every other key. The agent is
+      # never empty mid-swap, and a failed load keeps the old key.
+      read -r new_type new_blob _ < <(ssh-keygen -y -P '' -f "$CREDS_DIR/github-ssh-key")
+      if SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add "$CREDS_DIR/github-ssh-key"; then
+        while read -r type blob comment; do
+          [[ -n "$blob" && "$type $blob" != "$new_type $new_blob" ]] || continue
+          printf '%s %s %s\n' "$type" "$blob" "$comment" > "$TMPDIR_CLEAN/old-key.pub"
+          SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add -d "$TMPDIR_CLEAN/old-key.pub" \
+            || alert "cred-daemon" "could not remove an old key from ssh-agent"
+        done < <(SSH_AUTH_SOCK="$SSH_AGENT_SOCKET" ssh-add -L)
+      else
+        alert "cred-daemon" "ssh-add failed for new github-ssh-key; previous key kept"
+      fi
     else
       log "WARN: ssh-agent socket not present at $SSH_AGENT_SOCKET — cred file updated but not loaded"
     fi

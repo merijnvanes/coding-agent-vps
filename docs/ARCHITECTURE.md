@@ -170,7 +170,7 @@ systemd timer (`cred-daemon.timer`, `OnCalendar=04:00 UTC` daily, `Persistent=tr
 1. Reads bootstrap secret from `/etc/agent-vps/infisical-uauth`.
 2. Authenticates to the `coding-agent-vps` Infisical project via Universal Auth.
 3. Fetches `github-ssh-key` and `ntfy-topic`.
-4. `github-ssh-key`: validates with `ssh-keygen -y`, then `ssh-add -D` + `ssh-add <new>` against the creds-owned agent. The next signing request from the sandbox (via the bridged socket) sees the new key — no sandbox restart needed.
+4. `github-ssh-key`: validates with `ssh-keygen -y`, then `ssh-add <new>` against the creds-owned agent, and only after that load succeeds removes every other key with `ssh-add -d`, so the agent is never empty mid-swap. The next signing request from the sandbox (via the bridged socket) sees the new key — no sandbox restart needed.
 5. `ntfy-topic`: written to `/var/lib/agent-vps/creds/ntfy-topic` (mode 0600). The alert script reads it on each invocation.
 6. On Infisical authentication or fetch failure: publish to ntfy topic.
 
