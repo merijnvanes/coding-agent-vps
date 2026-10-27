@@ -154,7 +154,7 @@ jq -n '{clientId: env.INFISICAL_CLIENT_ID, clientSecret: env.INFISICAL_CLIENT_SE
 chmod 0600 "$BODY_FILE"
 
 log "authenticating to Infisical at $INFISICAL_URL"
-AUTH_RESPONSE=$(curl -fsSL --max-time 30 \
+AUTH_RESPONSE=$(curl -fsSL --max-time 30 --proto =https --proto-redir =https \
   -X POST "$INFISICAL_URL/api/v1/auth/universal-auth/login" \
   -H "Content-Type: application/json" \
   --data-binary "@$BODY_FILE" \
@@ -173,7 +173,7 @@ printf 'Authorization: Bearer %s\n' "$ACCESS_TOKEN" > "$HEADER_FILE"
 chmod 0600 "$HEADER_FILE"
 
 log "fetching secrets from project=$INFISICAL_PROJECT_ID env=$INFISICAL_ENV"
-SECRETS_JSON=$(curl -fsSL --max-time 30 \
+SECRETS_JSON=$(curl -fsSL --max-time 30 --proto =https --proto-redir =https \
   -H "@$HEADER_FILE" \
   "$INFISICAL_URL/api/v4/secrets?projectId=$INFISICAL_PROJECT_ID&environment=$INFISICAL_ENV&recursive=true" \
   ) || die "Infisical secrets fetch failed"

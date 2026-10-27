@@ -26,6 +26,9 @@ CORE_PROJECT_ID=$(ask    "Infisical project ID — coding-agent-vps (host-side)"
 TOOLING_PROJECT_ID=$(ask "Infisical project ID — coding-agent-vps-tooling (sandbox-side)")
 ENV=$(ask                "Infisical environment slug" "dev")
 URL=$(ask                "Infisical URL" "https://app.infisical.com")
+# The daemons send client secrets to this URL and refuse anything but
+# https; fail now, before the secret is typed.
+[[ "$URL" == https://* ]] || { echo "Infisical URL must start with https://" >&2; exit 1; }
 CLIENT_ID=$(ask          "Universal Auth client ID (<vps-name>-creds identity in the coding-agent-vps project)")
 CLIENT_SECRET=$(ask_secret "Universal Auth client secret (input hidden)")
 echo
