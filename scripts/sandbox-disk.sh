@@ -61,16 +61,23 @@ image_size_gb() {
   echo $(( total_gb - reserve_gb ))
 }
 
+root_free_gb() { echo $(( $(df -B1 --output=avail / | tail -1) / 1024 / 1024 / 1024 )); }
+
 create_image() {
-  local size_gb=$1 free_gb
-  free_gb=$(( $(df -B1 --output=avail / | tail -1) / 1024 / 1024 / 1024 ))
+  local size_gb=$1 free_gb allocated
+  free_gb=$(root_free_gb)
   (( free_gb >= size_gb + 5 )) \
     || die "need ${size_gb} GiB plus 5 GiB headroom free on /, have ${free_gb} GiB"
   log "creating a ${size_gb} GiB image at $IMAGE"
   install -d -m 0755 -o root -g root /var/lib/agent-vps
   ( umask 077; fallocate -l "${size_gb}G" "$IMAGE" )
   # -m 0: no root-reserved blocks; nothing on it runs as root.
-  mkfs.ext4 -q -F -m 0 -L sandbox-disk "$IMAGE"
+  # nodiscard: mkfs would otherwise discard the whole image, which on a
+  # regular file punches holes and hands the preallocated blocks back.
+  mkfs.ext4 -q -F -m 0 -E nodiscard -L sandbox-disk "$IMAGE"
+  allocated=$(( $(stat -c '%b * %B' "$IMAGE") ))
+  (( allocated >= size_gb * 1024 * 1024 * 1024 )) \
+    || die "$IMAGE is not fully allocated after mkfs ($allocated bytes)"
   install -d -m 0755 -o root -g root "$MNT"
   mount -o loop "$IMAGE" "$MNT"
   install -d -m 0710 -o dev -g dev "$MNT/docker"
@@ -109,6 +116,33 @@ mount_all() {
 
 as_dev() { sudo -u dev -H XDG_RUNTIME_DIR="/run/user/$DEV_UID" "$@"; }
 
+start_sandbox() {
+  log "starting rootless Docker and the sandbox"
+  as_dev systemctl --user start docker.service
+  as_dev bash -c 'cd /opt/agent-vps && docker compose up -d'
+}
+
+# Undo a migration that stopped before its fstab entries were written:
+# put the original directories back and drop the unfinished image, so
+# the next run starts from the old layout.
+recover_partial() {
+  local d
+  for d in "$DOCKER_DIR" "$PROJECTS_DIR"; do
+    [[ -e "$d.pre-sandbox-disk" ]] || continue
+    if [[ -e "$d" ]]; then
+      chattr -i "$d" 2>/dev/null || true
+      rmdir "$d" || die "both $d and $d.pre-sandbox-disk exist; sort them out by hand"
+    fi
+    mv "$d.pre-sandbox-disk" "$d"
+    log "restored $d from an unfinished migration"
+  done
+  if mountpoint -q "$MNT"; then umount "$MNT"; fi
+  if [[ -e "$IMAGE" ]]; then
+    log "removing the unfinished image $IMAGE"
+    rm -f "$IMAGE"
+  fi
+}
+
 case "${1:-}" in
   ensure)
     if configured; then
@@ -123,12 +157,31 @@ case "${1:-}" in
     ;;
 
   migrate)
-    configured && { mount_all; log "already on a sandbox disk"; exit 0; }
+    # Already moved (or a run that died after writing fstab): mount and
+    # make sure the sandbox runs.
+    if configured; then
+      mount_all
+      start_sandbox
+      log "on the sandbox disk"
+      exit 0
+    fi
+    recover_partial
     command -v rsync >/dev/null || apt-get install -y --no-install-recommends rsync
+
+    # Every check before the sandbox stops. Apparent sizes: a sparse file
+    # is copied at that size at worst.
+    used_gb=$(( ( $(du -sx --apparent-size -B1 "$DOCKER_DIR" "$PROJECTS_DIR" | awk '{ s += $1 } END { print s }') \
+                  + 1024 * 1024 * 1024 - 1 ) / 1024 / 1024 / 1024 ))
     size_gb=$(image_size_gb)
-    used_gb=$(( $(du -sxB1 "$DOCKER_DIR" "$PROJECTS_DIR" | awk '{ s += $1 } END { print s }') / 1024 / 1024 / 1024 ))
+    free_gb=$(root_free_gb)
+    if (( size_gb + 5 > free_gb )); then
+      # The data still sits on / until the old copies are deleted, so on a
+      # small disk the image starts smaller (USAGE.md says how to grow it).
+      size_gb=$(( free_gb - 5 ))
+      log "only room for a ${size_gb} GiB image now; grow it after deleting the old copies"
+    fi
     (( used_gb + 5 <= size_gb )) \
-      || die "Docker data and projects use ${used_gb} GiB; the ${size_gb} GiB disk would be nearly full. Prune first (docker builder prune)."
+      || die "Docker data and projects use ${used_gb} GiB, too much for a ${size_gb} GiB image. Prune first (docker builder prune -af)."
 
     log "stopping the sandbox and rootless Docker"
     as_dev docker stop sandbox >/dev/null 2>&1 || true
@@ -137,18 +190,16 @@ case "${1:-}" in
     create_image "$size_gb"
     log "copying $DOCKER_DIR and $PROJECTS_DIR (${used_gb} GiB)"
     # -HAX: hard links, ACLs and xattrs (overlay layers use them);
+    # -S: sparse files stay sparse;
     # --numeric-ids: the sandbox's files belong to subuids with no name.
-    rsync -aHAX --numeric-ids "$DOCKER_DIR/" "$MNT/docker/"
-    rsync -aHAX --numeric-ids "$PROJECTS_DIR/" "$MNT/projects/"
+    rsync -aHAXS --numeric-ids "$DOCKER_DIR/" "$MNT/docker/"
+    rsync -aHAXS --numeric-ids "$PROJECTS_DIR/" "$MNT/projects/"
 
     # The old copies stay until you have checked the sandbox.
     mv "$DOCKER_DIR" "$DOCKER_DIR.pre-sandbox-disk"
     mv "$PROJECTS_DIR" "$PROJECTS_DIR.pre-sandbox-disk"
     install_mounts
-
-    log "starting rootless Docker and the sandbox"
-    as_dev systemctl --user start docker.service
-    as_dev bash -c 'cd /opt/agent-vps && docker compose up -d'
+    start_sandbox
     log "done. Check the sandbox, then free the space of the old copies:"
     log "  sudo rm -rf $DOCKER_DIR.pre-sandbox-disk $PROJECTS_DIR.pre-sandbox-disk"
     ;;
