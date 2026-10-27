@@ -63,11 +63,16 @@ image_size_gb() {
 
 root_free_gb() { echo $(( $(df -B1 --output=avail / | tail -1) / 1024 / 1024 / 1024 )); }
 
-create_image() {
-  local size_gb=$1 free_gb allocated
+check_room() {
+  local size_gb=$1 free_gb
   free_gb=$(root_free_gb)
   (( free_gb >= size_gb + 5 )) \
     || die "need ${size_gb} GiB plus 5 GiB headroom free on /, have ${free_gb} GiB"
+}
+
+# Callers run check_room first; migrate does so before Docker stops.
+create_image() {
+  local size_gb=$1 allocated
   log "creating a ${size_gb} GiB image at $IMAGE"
   install -d -m 0755 -o root -g root /var/lib/agent-vps
   ( umask 077; fallocate -l "${size_gb}G" "$IMAGE" )
@@ -94,13 +99,17 @@ install_mounts() {
     install -d -m 0700 -o root -g root "$d"
     chattr +i "$d"
   done
-  mountpoint -q "$MNT" && umount "$MNT"
+  if mountpoint -q "$MNT"; then umount "$MNT"; fi
+  # All three entries and the marker land in one rename, so an
+  # interrupted run never leaves the marker without its entries.
+  cp -p /etc/fstab /etc/fstab.sandbox-disk.new
   {
     echo "$FSTAB_MARK"
     echo "$IMAGE $MNT ext4 loop,nofail,$before 0 0"
     echo "$MNT/docker $DOCKER_DIR none bind,nofail,x-systemd.requires-mounts-for=$MNT,$before 0 0"
     echo "$MNT/projects $PROJECTS_DIR none bind,nofail,x-systemd.requires-mounts-for=$MNT,$before 0 0"
-  } >> /etc/fstab
+  } >> /etc/fstab.sandbox-disk.new
+  mv /etc/fstab.sandbox-disk.new /etc/fstab
   systemctl daemon-reload
   mount_all
 }
@@ -118,7 +127,7 @@ as_dev() { sudo -u dev -H XDG_RUNTIME_DIR="/run/user/$DEV_UID" "$@"; }
 
 start_sandbox() {
   log "starting rootless Docker and the sandbox"
-  as_dev systemctl --user start docker.service
+  as_dev systemctl --user enable --now docker.service
   as_dev bash -c 'cd /opt/agent-vps && docker compose up -d'
 }
 
@@ -148,7 +157,9 @@ case "${1:-}" in
     if configured; then
       mount_all
     elif is_empty "$DOCKER_DIR" && is_empty "$PROJECTS_DIR"; then
-      create_image "$(image_size_gb)"
+      size_gb=$(image_size_gb)
+      check_room "$size_gb"
+      create_image "$size_gb"
       install_mounts
     else
       log "WARN: Docker data or projects already exist outside a sandbox disk."
@@ -182,10 +193,13 @@ case "${1:-}" in
     fi
     (( used_gb + 5 <= size_gb )) \
       || die "Docker data and projects use ${used_gb} GiB, too much for a ${size_gb} GiB image. Prune first (docker builder prune -af)."
+    check_room "$size_gb"
 
+    # Disabled, not only stopped: a reboot mid-move must not start Docker
+    # on an empty data directory. start_sandbox enables it again.
     log "stopping the sandbox and rootless Docker"
     as_dev docker stop sandbox >/dev/null 2>&1 || true
-    as_dev systemctl --user stop docker.service
+    as_dev systemctl --user disable --now docker.service
 
     create_image "$size_gb"
     log "copying $DOCKER_DIR and $PROJECTS_DIR (${used_gb} GiB)"
