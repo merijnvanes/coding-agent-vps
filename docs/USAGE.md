@@ -176,7 +176,7 @@ fetches the current value from Infisical.
 1. Update the value in the Infisical UI.
 2. Next CLI invocation picks it up — every `hcloud`/`wrangler`/`gcloud`/`supabase` invocation and every `infisical run --` fetches fresh. No daemon restart, no shell re-source, no running-tmux footgun.
 
-**Host-side credentials** (`github-ssh-key`, `ntfy-topic` in `coding-agent-vps`):
+**Host-side credentials** (`github-ssh-key`, `ntfy-topic` in `coding-agent-vps`). For `ntfy-topic`:
 
 1. Update the value in the Infisical UI.
 2. SSH into the VPS and run:
@@ -185,11 +185,23 @@ fetches the current value from Infisical.
    ```
    to pull the new value immediately. Or wait for the daily 04:00 UTC refresh.
 
-   For `github-ssh-key`: cred-daemon swaps it into ssh-agent on success; sandbox's next signing request uses the new key.
-3. For `github-ssh-key`: check from the sandbox that the new key works
-   (`docker exec sandbox ssh -T git@github.com`), then delete the old
-   public key at GitHub (Settings → SSH and GPG keys). Until you do,
-   anyone with a copy of the old private key can still push.
+**`github-ssh-key`** needs GitHub on both sides of the swap:
+
+1. Make a new key pair and add its public key at GitHub, with SSO
+   authorization where needed, as in SETUP.md Phase 4. Keep the old key
+   at GitHub for now. Note the new fingerprint:
+   `ssh-keygen -lf ~/Downloads/coding-agent-vps-key.pub`.
+2. Paste the new private key into Infisical as `github-ssh-key`, then
+   shred the local files (Phase 4 cleanup).
+3. On the VPS: `sudo systemctl start cred-daemon`. cred-daemon swaps the
+   key into ssh-agent; it keeps the old one if the new value is not a
+   valid key.
+4. Check that the swap happened: `docker exec sandbox ssh-add -l` must
+   show one key, with the new fingerprint. Then
+   `docker exec sandbox ssh -T git@github.com` must greet you.
+5. Delete the old public key at GitHub (Settings → SSH and GPG keys).
+   Until you do, anyone with a copy of the old private key can still
+   push.
 
 ## Adding push alerts later
 
