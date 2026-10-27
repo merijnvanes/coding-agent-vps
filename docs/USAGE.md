@@ -186,6 +186,10 @@ fetches the current value from Infisical.
    to pull the new value immediately. Or wait for the daily 04:00 UTC refresh.
 
    For `github-ssh-key`: cred-daemon swaps it into ssh-agent on success; sandbox's next signing request uses the new key.
+3. For `github-ssh-key`: check from the sandbox that the new key works
+   (`docker exec sandbox ssh -T git@github.com`), then delete the old
+   public key at GitHub (Settings → SSH and GPG keys). Until you do,
+   anyone with a copy of the old private key can still push.
 
 ## Adding push alerts later
 
