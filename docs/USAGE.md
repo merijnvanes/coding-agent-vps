@@ -235,7 +235,10 @@ the host is the highest-leverage action you can take.
    This is the kill switch. The admin token lives only on your laptop;
    the agent has no path to it and no way to prevent deletion.
 2. **Revoke OAuth grants** at https://console.anthropic.com (Claude)
-   and https://platform.openai.com (Codex). The refresh tokens lived
+   and https://platform.openai.com (Codex). For the Gemini CLI, and
+   for the `seo` CLI if you ran `seo auth login`, go to
+   https://myaccount.google.com/connections and remove their access
+   to your Google account. The refresh tokens lived
    in the sandbox volume, which is now gone with the VPS — but the
    OAuth grants at the issuer remain valid until you revoke them, so
    if the agent already exfiltrated a token it could still be used
