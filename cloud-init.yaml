@@ -75,6 +75,13 @@ write_files:
     encoding: base64
     content: __DEPLOY_KEY_B64__
 
+  # Tailscale auth key, read by `tailscale up --auth-key=file:` in runcmd
+  # and deleted right after, so it is never in a process's argv.
+  - path: /root/tailscale-authkey
+    permissions: '0600'
+    owner: root:root
+    content: __TAILSCALE_AUTH_KEY__
+
   # SSH config: use the deploy key only for github.com, no agent forwarding.
   - path: /root/.ssh/config
     permissions: '0600'
@@ -139,7 +146,8 @@ runcmd:
   # No --accept-routes: the VPS doesn't need to route through any subnet
   # routes peers advertise (laptop LANs, corporate networks, etc.). The
   # design's asymmetric-reachability promise is cleaner without it.
-  - tailscale up --auth-key=__TAILSCALE_AUTH_KEY__ --hostname=coding-agent-vps --advertise-tags=tag:coding-agent-vps --ssh
+  - tailscale up --auth-key=file:/root/tailscale-authkey --hostname=coding-agent-vps --advertise-tags=tag:coding-agent-vps --ssh
+  - rm -f /root/tailscale-authkey
 
   # 3. Tighten /root/.ssh dir mode (write_files creates parent dirs but
   #    doesn't enforce mode), then clone over SSH using the deploy key.

@@ -266,7 +266,8 @@ runs again.
    if the agent already exfiltrated a token it could still be used
    from elsewhere.
 3. **Revoke each upstream credential** at the issuing service: GitHub
-   SSH key (Settings → SSH and GPG keys → Delete), Cloudflare token,
+   SSH key (Settings → SSH and GPG keys → Delete), for a private repo
+   the VPS's deploy key (repo Settings → Deploy keys), Cloudflare token,
    GCP SA key, Hetzner apps token, npm/PyPI tokens. Manual UI clicks
    per service. Assume any credential the daemon had fetched is in
    the attacker's hands.

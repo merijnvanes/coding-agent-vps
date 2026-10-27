@@ -23,13 +23,28 @@ TYPE="${TYPE:-cx23}"                   # 2 vCPU / 4GB / 40GB shared x86 (~€4.5
 IMAGE="${IMAGE:-ubuntu-24.04}"
 FIREWALL="${FIREWALL:-agent-vps-deny-all}"
 
-# Repo-scoped read-only deploy key. Generated once, registered on the
-# GitHub repo (yours or your fork's), then embedded in cloud-init user-data
-# so the VPS can `git clone` at first boot. Same trust class as the
-# Tailscale auth-key (Hetzner sees the user-data once); read-only and
-# scoped to this one repo.
-DEPLOY_KEY_PATH="${DEPLOY_KEY_PATH:-$HOME/.ssh/coding-agent-vps-deploy}"
-DEPLOY_KEY_TITLE="coding-agent-vps deploy key (provision.sh)"
+# Repo-scoped read-only deploy key, private repos only. A new key for each
+# run: registered on the GitHub repo, embedded in cloud-init user-data so
+# the VPS can `git clone` and pull, and never stored on the laptop. Once
+# the new server exists, the keys of earlier servers with this name are
+# deleted from the repo; if the run fails first, the new key is deleted.
+# Same trust class as the Tailscale auth-key (Hetzner sees the user-data);
+# read-only and scoped to this one repo.
+DEPLOY_KEY_TITLE="coding-agent-vps deploy key (${SERVER_NAME})"
+# Title used before keys were made per run; replaced the same way.
+LEGACY_DEPLOY_KEY_TITLE="coding-agent-vps deploy key (provision.sh)"
+
+WORK_DIR=$(mktemp -d)
+NEW_DEPLOY_KEY_ID=""
+SERVER_CREATED=false
+cleanup() {
+  if [[ -n "$NEW_DEPLOY_KEY_ID" ]] && ! $SERVER_CREATED; then
+    gh api -X DELETE "/repos/${GH_REPO}/keys/${NEW_DEPLOY_KEY_ID}" >/dev/null 2>&1 \
+      || echo "WARNING: delete the unused deploy key ${NEW_DEPLOY_KEY_ID} on ${GH_REPO} by hand." >&2
+  fi
+  rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
 
 # Auto-detect the GitHub repo from the local `origin` remote so forks
 # Just Work without editing this file. Override with `GH_REPO=owner/repo`
@@ -111,30 +126,16 @@ fi
 # base64 decoder doesn't trip on null/empty content (some versions don't
 # handle that cleanly; the resulting file is unused either way).
 DEPLOY_KEY_B64="IA=="
+DEPLOY_KEY_PATH="$WORK_DIR/deploy-key"
 if [[ "$REPO_VISIBILITY" == "private" ]]; then
-  # Ensure deploy key exists locally; generate if missing.
-  mkdir -p "$(dirname "$DEPLOY_KEY_PATH")"
-  chmod 0700 "$(dirname "$DEPLOY_KEY_PATH")"
-  if [[ ! -f "$DEPLOY_KEY_PATH" ]]; then
-    echo "Generating deploy keypair: $DEPLOY_KEY_PATH"
-    ssh-keygen -t ed25519 -f "$DEPLOY_KEY_PATH" -N "" -C "coding-agent-vps deploy" >/dev/null
-  fi
-  [[ -f "${DEPLOY_KEY_PATH}.pub" ]] || { echo "ERROR: ${DEPLOY_KEY_PATH}.pub missing" >&2; exit 1; }
-
-  # Register the public key as a read-only deploy key on the repo if not
-  # already registered (idempotent — compares the actual key material).
-  LOCAL_PUB_KEY=$(awk '{print $1, $2}' "${DEPLOY_KEY_PATH}.pub")
-  if gh api "/repos/${GH_REPO}/keys" --jq '.[].key' 2>/dev/null \
-     | awk '{print $1, $2}' | grep -Fxq "$LOCAL_PUB_KEY"; then
-    echo "✓ Deploy key already registered on ${GH_REPO}"
-  else
-    echo "Registering deploy key on ${GH_REPO} (read-only)..."
-    gh api -X POST "/repos/${GH_REPO}/keys" \
-      -f "title=${DEPLOY_KEY_TITLE}" \
-      -f "key=$(cat "${DEPLOY_KEY_PATH}.pub")" \
-      -F "read_only=true" >/dev/null
-    echo "✓ Registered."
-  fi
+  ssh-keygen -q -t ed25519 -f "$DEPLOY_KEY_PATH" -N "" -C "coding-agent-vps deploy ${SERVER_NAME}"
+  echo "Registering a new read-only deploy key on ${GH_REPO}..."
+  NEW_DEPLOY_KEY_ID=$(gh api -X POST "/repos/${GH_REPO}/keys" \
+    -f "title=${DEPLOY_KEY_TITLE}" \
+    -f "key=$(cat "${DEPLOY_KEY_PATH}.pub")" \
+    -F "read_only=true" --jq '.id')
+  [[ "$NEW_DEPLOY_KEY_ID" =~ ^[0-9]+$ ]] || { echo "ERROR: deploy key registration returned no id" >&2; exit 1; }
+  echo "✓ Registered (id ${NEW_DEPLOY_KEY_ID})."
 
   # Base64-encode for safe single-line substitution into cloud-init's
   # write_files block (encoding: base64).
@@ -185,19 +186,19 @@ read -rsp "Paste Tailscale auth-key (input hidden): " TAILSCALE_AUTH_KEY
 echo
 
 # Substitute into cloud-init template. For public repos DEPLOY_KEY_B64 is
-# empty — the deploy-key write_files entry becomes a 0-byte file (harmless;
-# never used because the HTTPS clone needs no auth).
-USER_DATA=$(mktemp)
-trap 'rm -f "$USER_DATA"' EXIT
-# The signer line holds an email address, which may contain sed's
-# replacement metacharacters.
-ALLOWED_SIGNERS_SED=$(printf '%s' "$ALLOWED_SIGNERS" | sed 's/[\\|&]/\\&/g')
-git show "${REMOTE_TIP}:cloud-init.yaml" \
-  | sed -e "s|__TAILSCALE_AUTH_KEY__|${TAILSCALE_AUTH_KEY}|g" \
-        -e "s|__DEPLOY_KEY_B64__|${DEPLOY_KEY_B64}|g" \
-        -e "s|__CLONE_URL__|${CLONE_URL}|g" \
-        -e "s|__ALLOWED_SIGNERS__|${ALLOWED_SIGNERS_SED}|g" \
-  > "$USER_DATA"
+# a 1-byte placeholder — the deploy-key write_files entry becomes a file
+# that is never used, because the HTTPS clone needs no auth.
+# Bash substitution, not sed: the auth key and the deploy key would be in
+# sed's argv, which every local user can read. The quoted replacements are
+# taken literally, so the signer line's email needs no escaping.
+USER_DATA="$WORK_DIR/user-data"
+TEMPLATE=$(git show "${REMOTE_TIP}:cloud-init.yaml")
+TEMPLATE=${TEMPLATE//__TAILSCALE_AUTH_KEY__/"$TAILSCALE_AUTH_KEY"}
+TEMPLATE=${TEMPLATE//__DEPLOY_KEY_B64__/"$DEPLOY_KEY_B64"}
+TEMPLATE=${TEMPLATE//__CLONE_URL__/"$CLONE_URL"}
+TEMPLATE=${TEMPLATE//__ALLOWED_SIGNERS__/"$ALLOWED_SIGNERS"}
+( umask 077; printf '%s\n' "$TEMPLATE" > "$USER_DATA" )
+unset TEMPLATE
 
 # Confirm before destroying any existing server with the same name. Last
 # of all, so a failed check above never leaves you without a VPS.
@@ -219,6 +220,22 @@ hcloud server create \
   --location "$LOCATION" \
   --firewall "$FIREWALL" \
   --user-data-from-file "$USER_DATA"
+SERVER_CREATED=true
+
+# The new server has its own deploy key; earlier servers of this name are
+# gone, so their keys go too.
+if [[ "$REPO_VISIBILITY" == "private" ]]; then
+  old_ids=$(gh api "/repos/${GH_REPO}/keys" \
+      --jq ".[] | select((.title == \"${DEPLOY_KEY_TITLE}\" or .title == \"${LEGACY_DEPLOY_KEY_TITLE}\") and .id != ${NEW_DEPLOY_KEY_ID}) | .id") \
+    || { old_ids=""; echo "WARNING: could not list the deploy keys on ${GH_REPO}; delete old '${DEPLOY_KEY_TITLE}' keys by hand." >&2; }
+  for old_id in $old_ids; do
+    if gh api -X DELETE "/repos/${GH_REPO}/keys/${old_id}" >/dev/null; then
+      echo "✓ Deleted the previous deploy key ${old_id}"
+    else
+      echo "WARNING: could not delete deploy key ${old_id} on ${GH_REPO}; delete it by hand." >&2
+    fi
+  done
+fi
 
 echo
 echo "✓ Server created. Cloud-init runs in the background and takes ~5–10 min"

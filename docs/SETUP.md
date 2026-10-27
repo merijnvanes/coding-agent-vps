@@ -895,9 +895,12 @@ The script will:
 2. Check that origin's tip is signed by the signing key above, and put
    that key into the cloud-init user-data as the VPS's only trusted
    signer.
-3. **For private repos only**: generate (if missing) a read-only ed25519
-   deploy key at `~/.ssh/coding-agent-vps-deploy` and register it on
-   the repo via `gh api` (idempotent).
+3. **For private repos only**: generate a new read-only ed25519 deploy
+   key for this server and register it on the repo via `gh api`. The
+   private key goes only into the user-data, never into `~/.ssh`. Once
+   the server is created, the script deletes the deploy keys of earlier
+   servers with the same name; if the run fails before that, it deletes
+   the new key instead.
 4. Prompt for the Tailscale auth-key. The **user** pastes it
    directly into the `provision.sh` prompt (input is hidden — the
    key never reaches the chat with you).
