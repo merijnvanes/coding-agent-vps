@@ -20,9 +20,11 @@ printf '[%s] alert: %s: %s\n' "$(date -Iseconds)" "$TITLE" "$MESSAGE" >&2
 if [[ -r "$NTFY_TOPIC_FILE" ]]; then
   topic=$(< "$NTFY_TOPIC_FILE")
   if [[ -n "$topic" ]]; then
-    curl -fsSL --max-time 10 \
+    # --data-raw: with -d, a message starting with @ would make curl
+    # read and send a file.
+    curl -fsSL --max-time 10 --proto =https --proto-redir =https \
       -H "Title: $TITLE" \
-      -d "$MESSAGE" \
+      --data-raw "$MESSAGE" \
       "https://ntfy.sh/$topic" >/dev/null 2>&1 || \
       printf '[%s] WARN: ntfy publish failed (network or topic invalid)\n' \
         "$(date -Iseconds)" >&2
