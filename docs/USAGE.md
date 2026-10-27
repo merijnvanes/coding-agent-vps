@@ -227,6 +227,12 @@ first — kill the VPS — then revoke credentials. Cached env vars and
 in-flight API calls keep working until the process is gone, so killing
 the host is the highest-leverage action you can take.
 
+Do not try to clean the VPS in place. ssh-agent keeps the GitHub key in
+memory after its file is deleted, and the sandbox's named volumes
+(`~/.claude` settings and hooks, `~/.codex`, `~/.gemini`) and `/work`
+survive a container rebuild, so the agent can leave code there that
+runs again.
+
 1. **Kill the VPS immediately.** From your laptop:
    ```bash
    hcloud context use coding-agent-vps-admin
