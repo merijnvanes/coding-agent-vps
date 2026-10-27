@@ -122,7 +122,7 @@ Ingress is blocked at three deny-by-default layers, configured during cloud-init
 
 Egress is unrestricted from the sandbox (per REQUIREMENTS.md §5 — laptop parity), except for the metadata service above.
 
-**Sandbox dev-server ports are exempt by design.** `docker-compose.yml` publishes a few port ranges (3000-3009, 5170-5179, 8000-8089) bound to `127.0.0.1` on the VPS host. They sit on the loopback interface, not on `eth0` or `tailscale0`, so the three deny layers above don't see them and don't need to — the only path that can reach them is SSH port forwarding from a Tailscale-authenticated laptop session, which is already the access model. See [USAGE.md "Exposing a sandbox dev server"](./USAGE.md#exposing-a-sandbox-dev-server).
+**Sandbox dev-server ports are exempt by design.** `docker-compose.yml` publishes a few port ranges (3000-3009, 5170-5179, 8000-8089) bound to `127.0.0.1` on the VPS host. They sit on the loopback interface, not on `eth0` or `tailscale0`, so the three deny layers above don't see them and don't need to. Every process on the host can connect to them, whatever its user; from off the host, the only path is SSH port forwarding from a Tailscale-authenticated laptop session, which is already the access model. So a dev server in the sandbox must not trust a connection because it comes from loopback. See [USAGE.md "Exposing a sandbox dev server"](./USAGE.md#exposing-a-sandbox-dev-server).
 
 ## Per-CLI integration
 
@@ -228,6 +228,7 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
   sockets/                                     # mounted into sandbox; 0755 dir, 0666 socket files
     ssh-agent.sock         0666  creds:creds   # raw ssh-agent — cred-daemon uses this directly
     ssh-agent-bridge.sock  0666  creds:creds   # socat relay — sandbox uses this (UID-namespace bridge)
+    email-meta.sock        0666  root:root     # email-meta helper (email-meta.socket, set up outside this repo); Gmail metadata only, the token stays with its host user
   agent-token/                                 # mounted read-only into sandbox; 0755 dir
     token                  0644  creds:creds   # 1-hour Infisical access token for `<vps-name>-agent`, refreshed every 20 min
 
