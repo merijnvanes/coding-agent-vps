@@ -326,6 +326,14 @@ install -d -m 0755 -o creds  -g creds  /var/lib/agent-vps/agent-token
 # step 4, once the sandbox's mapped UID is known.
 install -d -m 0755 -o dev -g dev /srv/dev
 
+# === 3b. Sandbox disk ===
+# dev's Docker data and /srv/dev/projects live on their own fixed-size
+# filesystem, so a runaway sandbox cannot fill the root disk (see the
+# script's header). A new VPS gets it here, before rootless Docker is set
+# up; an older VPS with data already in place gets a warning that names
+# the one-time `migrate` step.
+bash /opt/agent-vps/scripts/sandbox-disk.sh ensure
+
 # === 4. subuid / subgid for rootless Docker ===
 # Default range — required by dockerd-rootless-setuptool.sh below. No custom
 # GID mapping needed any more (the agent-sockets-group approach was dropped

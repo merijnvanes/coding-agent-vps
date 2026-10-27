@@ -231,8 +231,12 @@ Triggered when the VPS is destroyed/compromised/lost. Runs from the laptop using
     email-meta.sock        0666  root:root     # email-meta helper (email-meta.socket, set up outside this repo); Gmail metadata only, the token stays with its host user
   agent-token/                                 # mounted read-only into sandbox; 0755 dir
     token                  0644  creds:creds   # 1-hour Infisical access token for `<vps-name>-agent`, refreshed every 20 min
+  sandbox-disk.img         0600  root:root     # preallocated ext4 image: disk − 40% (≥15 GiB) host reserve; scripts/sandbox-disk.sh
 
-/srv/dev/projects/          0770  dev:dev   # mounted rw into sandbox at /work; ACL u:<subuid base + 999>:rwx for the sandbox's `agent`
+/srv/sandbox-disk/                             # sandbox-disk.img, loop-mounted (fstab, nofail); full = ENOSPC for the sandbox only
+  docker/                  0710  dev:dev       # bind-mounted on /home/dev/.local/share/docker (rootless Docker data: images, build cache, writable layer, named volumes)
+  projects/                0770  dev:dev       # bind-mounted on /srv/dev/projects
+/srv/dev/projects/          0770  dev:dev   # mounted rw into sandbox at /work; ACL u:<subuid base + 999>:rwx for the sandbox's `agent`; the bare mount point is immutable
 
 /opt/agent-vps/                   root:root      # cloned from the configured GH_REPO at cloud-init time; pulls only owner-signed commits
   daemon/                                       # cred-daemon, agent-token, ssh-agent-creds, ssh-agent-bridge, sandbox-metadata-block units

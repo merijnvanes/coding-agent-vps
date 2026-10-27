@@ -388,6 +388,21 @@ you recreate it, which ends the tmux session and every agent in it:
 cd /opt/agent-vps && docker compose up -d
 ```
 
+**Sandbox disk, once per older VPS.** A VPS set up before the sandbox
+disk existed keeps its Docker data and projects on the root filesystem,
+and the setup script says so with a `WARN`. Move them onto the sandbox
+disk once. This stops the sandbox (tmux ends) and copies the data, a
+few minutes for 10 GB; prune the build cache first so less is copied:
+
+```bash
+docker builder prune -af
+sudo bash /opt/agent-vps/scripts/sandbox-disk.sh migrate
+```
+
+The old copies stay as `*.pre-sandbox-disk` next to the originals.
+Check the sandbox (tmux, `/work`, `claude` still logged in), then
+delete them with the `rm` line the script prints.
+
 The script leaves services that already run alone, so a change to
 `daemon/ssh-agent-creds.service` or `daemon/ssh-agent-bridge.service`
 takes effect only after a restart. The agent loads the cached GitHub
@@ -596,6 +611,31 @@ separately-attached Hetzner Cloud volume — not in v1 scope (see
 [REQUIREMENTS.md §6](./REQUIREMENTS.md): backups are WON'T-v1).
 
 ## Troubleshooting
+
+### Sandbox says "No space left on device"
+
+The sandbox disk is full: dev's Docker data and `/srv/dev/projects` share
+one fixed-size filesystem (ARCHITECTURE.md file layout), so the host
+itself still has room. See what fills it, as dev:
+
+```bash
+df -h /srv/sandbox-disk
+docker system df          # images, build cache, the container's writable layer
+sudo du -sh /srv/dev/projects/* | sort -h | tail
+```
+
+`docker builder prune -af` frees the build cache. To grow the disk
+instead, stop the sandbox and Docker, grow the image, then start again:
+
+```bash
+docker stop sandbox && systemctl --user stop docker
+sudo umount /srv/dev/projects /home/dev/.local/share/docker /srv/sandbox-disk
+sudo fallocate -l <new size>G /var/lib/agent-vps/sandbox-disk.img
+sudo e2fsck -f /var/lib/agent-vps/sandbox-disk.img
+sudo resize2fs /var/lib/agent-vps/sandbox-disk.img
+sudo mount /srv/sandbox-disk && sudo mount /home/dev/.local/share/docker && sudo mount /srv/dev/projects
+systemctl --user start docker && cd /opt/agent-vps && docker compose up -d
+```
 
 ### VPS unresponsive: CPU pegged, SSH hangs
 
