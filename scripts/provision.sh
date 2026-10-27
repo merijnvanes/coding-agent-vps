@@ -52,10 +52,12 @@ cleanup() {
     # The POST may have succeeded without returning the id; find the key
     # by its material.
     [[ -n "$NEW_DEPLOY_KEY_ID" ]] \
-      || NEW_DEPLOY_KEY_ID=$(list_deploy_keys 2>/dev/null | awk -F'\t' -v k="$NEW_DEPLOY_PUB" '$3 == k { print $1 }')
-    if [[ -n "$NEW_DEPLOY_KEY_ID" ]]; then
-      gh api -X DELETE "/repos/${GH_REPO}/keys/${NEW_DEPLOY_KEY_ID}" >/dev/null 2>&1 \
-        || echo "WARNING: delete the unused deploy key ${NEW_DEPLOY_KEY_ID} on ${GH_REPO} by hand." >&2
+      || NEW_DEPLOY_KEY_ID=$({ list_deploy_keys 2>/dev/null || true; } \
+           | awk -F'\t' -v k="$NEW_DEPLOY_PUB" '$3 == k { print $1; exit }')
+    if [[ -z "$NEW_DEPLOY_KEY_ID" ]]; then
+      echo "WARNING: check ${GH_REPO} for an unused '${DEPLOY_KEY_TITLE}' deploy key and delete it." >&2
+    elif ! gh api -X DELETE "/repos/${GH_REPO}/keys/${NEW_DEPLOY_KEY_ID}" >/dev/null 2>&1; then
+      echo "WARNING: delete the unused deploy key ${NEW_DEPLOY_KEY_ID} on ${GH_REPO} by hand." >&2
     fi
   fi
   rm -rf "$WORK_DIR"
@@ -248,7 +250,8 @@ SERVER_CREATED=true
 # gone, so their keys go too.
 if [[ "$REPO_VISIBILITY" == "private" ]]; then
   if keys=$(list_deploy_keys); then
-    old_ids=$(awk -F'\t' -v t="$DEPLOY_KEY_TITLE" -v n="$NEW_DEPLOY_KEY_ID" '$2 == t && $1 != n { print $1 }' <<<"$keys")
+    old_ids=$(awk -F'\t' -v t="$DEPLOY_KEY_TITLE" -v l="$LEGACY_DEPLOY_KEY_TITLE" -v n="$NEW_DEPLOY_KEY_ID" \
+      '$2 == t && $2 != l && $1 != n { print $1 }' <<<"$keys")
     for old_id in $old_ids; do
       if gh api -X DELETE "/repos/${GH_REPO}/keys/${old_id}" >/dev/null; then
         echo "✓ Deleted the previous deploy key ${old_id}"
