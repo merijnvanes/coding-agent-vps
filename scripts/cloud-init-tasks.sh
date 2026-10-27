@@ -367,14 +367,15 @@ if ! command -v docker >/dev/null 2>&1; then
   # Manual Docker APT setup (no `get.docker.com | sh`). Inlines what the
   # convenience script does: fetch the static GPG key file, write keyring
   # + sources.list, apt install. Subsequent apt updates are GPG-verified.
+  # The key must have Docker's published fingerprint (also in the Docker
+  # install docs), or setup stops here.
   log "installing Docker engine via manual APT setup"
   install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-    -o /etc/apt/keyrings/docker.asc
-  chmod 0644 /etc/apt/keyrings/docker.asc
+  bash /opt/agent-vps/sandbox/fetch-apt-key.sh https://download.docker.com/linux/ubuntu/gpg \
+    /etc/apt/keyrings/docker.gpg 9DC858229FC7DD38854AE2D88D81803C0EBFCD88
   arch=$(dpkg --print-architecture)
   codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-  echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${codename} stable" \
+  echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${codename} stable" \
     > /etc/apt/sources.list.d/docker.list
   apt-get update
   # docker-ce-rootless-extras provides dockerd-rootless-setuptool.sh, which
