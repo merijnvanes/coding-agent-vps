@@ -31,16 +31,32 @@ FIREWALL="${FIREWALL:-agent-vps-deny-all}"
 # Same trust class as the Tailscale auth-key (Hetzner sees the user-data);
 # read-only and scoped to this one repo.
 DEPLOY_KEY_TITLE="coding-agent-vps deploy key (${SERVER_NAME})"
-# Title used before keys were made per run; replaced the same way.
+# Title used before keys were made per run. It names no server, so the
+# script lists these keys but never deletes them: one may still serve a
+# server with another name.
 LEGACY_DEPLOY_KEY_TITLE="coding-agent-vps deploy key (provision.sh)"
 
 WORK_DIR=$(mktemp -d)
+NEW_DEPLOY_PUB=""      # "type blob" of the key this run registers
 NEW_DEPLOY_KEY_ID=""
 SERVER_CREATED=false
+
+# Prints "id<TAB>title<TAB>type blob" for every deploy key on the repo.
+list_deploy_keys() {
+  gh api --paginate "/repos/${GH_REPO}/keys" \
+    --jq '.[] | "\(.id)\t\(.title)\t\(.key | split(" ") | .[0:2] | join(" "))"'
+}
+
 cleanup() {
-  if [[ -n "$NEW_DEPLOY_KEY_ID" ]] && ! $SERVER_CREATED; then
-    gh api -X DELETE "/repos/${GH_REPO}/keys/${NEW_DEPLOY_KEY_ID}" >/dev/null 2>&1 \
-      || echo "WARNING: delete the unused deploy key ${NEW_DEPLOY_KEY_ID} on ${GH_REPO} by hand." >&2
+  if [[ -n "$NEW_DEPLOY_PUB" ]] && ! $SERVER_CREATED; then
+    # The POST may have succeeded without returning the id; find the key
+    # by its material.
+    [[ -n "$NEW_DEPLOY_KEY_ID" ]] \
+      || NEW_DEPLOY_KEY_ID=$(list_deploy_keys 2>/dev/null | awk -F'\t' -v k="$NEW_DEPLOY_PUB" '$3 == k { print $1 }')
+    if [[ -n "$NEW_DEPLOY_KEY_ID" ]]; then
+      gh api -X DELETE "/repos/${GH_REPO}/keys/${NEW_DEPLOY_KEY_ID}" >/dev/null 2>&1 \
+        || echo "WARNING: delete the unused deploy key ${NEW_DEPLOY_KEY_ID} on ${GH_REPO} by hand." >&2
+    fi
   fi
   rm -rf "$WORK_DIR"
 }
@@ -99,19 +115,20 @@ HAS_UPSTREAM=true
 git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1 || HAS_UPSTREAM=false
 
 LOCAL_AHEAD=0
+FETCHED=true
 if $HAS_UPSTREAM; then
   # Compare with origin as it is now, not as of the last fetch.
   UPSTREAM_REMOTE=$(git config "branch.$(git branch --show-current).remote" || true)
-  git fetch -q "${UPSTREAM_REMOTE:-origin}" \
-    || echo "WARNING: could not fetch ${UPSTREAM_REMOTE:-origin}; comparing with the last fetched state." >&2
+  git fetch -q "${UPSTREAM_REMOTE:-origin}" || FETCHED=false
   LOCAL_AHEAD=$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)
 fi
 WORKING_DIRTY=$(git status --porcelain 2>/dev/null | head -c1)
 
-if ! $HAS_UPSTREAM || [[ "$LOCAL_AHEAD" -gt 0 || -n "$WORKING_DIRTY" ]]; then
+if ! $HAS_UPSTREAM || ! $FETCHED || [[ "$LOCAL_AHEAD" -gt 0 || -n "$WORKING_DIRTY" ]]; then
   echo
   echo "WARNING: this checkout may have changes not on origin:"
   $HAS_UPSTREAM                 || echo "  - no upstream tracking branch — cannot compare to origin"
+  $FETCHED                      || echo "  - could not fetch ${UPSTREAM_REMOTE:-origin} — compared with the last fetched state"
   [[ "$LOCAL_AHEAD" -gt 0 ]]    && echo "  - ${LOCAL_AHEAD} commit(s) ahead of $(git rev-parse --abbrev-ref '@{u}' 2>/dev/null)"
   [[ -n "$WORKING_DIRTY" ]]     && echo "  - uncommitted changes in the working tree"
   echo "Cloud-init clones from origin, so anything not pushed will NOT reach the VPS."
@@ -130,6 +147,7 @@ DEPLOY_KEY_PATH="$WORK_DIR/deploy-key"
 if [[ "$REPO_VISIBILITY" == "private" ]]; then
   ssh-keygen -q -t ed25519 -f "$DEPLOY_KEY_PATH" -N "" -C "coding-agent-vps deploy ${SERVER_NAME}"
   echo "Registering a new read-only deploy key on ${GH_REPO}..."
+  NEW_DEPLOY_PUB=$(awk '{ print $1, $2 }' "${DEPLOY_KEY_PATH}.pub")
   NEW_DEPLOY_KEY_ID=$(gh api -X POST "/repos/${GH_REPO}/keys" \
     -f "title=${DEPLOY_KEY_TITLE}" \
     -f "key=$(cat "${DEPLOY_KEY_PATH}.pub")" \
@@ -229,16 +247,23 @@ SERVER_CREATED=true
 # The new server has its own deploy key; earlier servers of this name are
 # gone, so their keys go too.
 if [[ "$REPO_VISIBILITY" == "private" ]]; then
-  old_ids=$(gh api "/repos/${GH_REPO}/keys" \
-      --jq ".[] | select((.title == \"${DEPLOY_KEY_TITLE}\" or .title == \"${LEGACY_DEPLOY_KEY_TITLE}\") and .id != ${NEW_DEPLOY_KEY_ID}) | .id") \
-    || { old_ids=""; echo "WARNING: could not list the deploy keys on ${GH_REPO}; delete old '${DEPLOY_KEY_TITLE}' keys by hand." >&2; }
-  for old_id in $old_ids; do
-    if gh api -X DELETE "/repos/${GH_REPO}/keys/${old_id}" >/dev/null; then
-      echo "✓ Deleted the previous deploy key ${old_id}"
-    else
-      echo "WARNING: could not delete deploy key ${old_id} on ${GH_REPO}; delete it by hand." >&2
+  if keys=$(list_deploy_keys); then
+    old_ids=$(awk -F'\t' -v t="$DEPLOY_KEY_TITLE" -v n="$NEW_DEPLOY_KEY_ID" '$2 == t && $1 != n { print $1 }' <<<"$keys")
+    for old_id in $old_ids; do
+      if gh api -X DELETE "/repos/${GH_REPO}/keys/${old_id}" >/dev/null; then
+        echo "✓ Deleted the previous deploy key ${old_id}"
+      else
+        echo "WARNING: could not delete deploy key ${old_id} on ${GH_REPO}; delete it by hand." >&2
+      fi
+    done
+    legacy_ids=$(awk -F'\t' -v t="$LEGACY_DEPLOY_KEY_TITLE" '$2 == t { print $1 }' <<<"$keys")
+    if [[ -n "$legacy_ids" ]]; then
+      echo "NOTE: ${GH_REPO} still has deploy keys titled '${LEGACY_DEPLOY_KEY_TITLE}' (ids: $(echo $legacy_ids))."
+      echo "      Delete them (repo Settings → Deploy keys) once no older server uses them."
     fi
-  done
+  else
+    echo "WARNING: could not list the deploy keys on ${GH_REPO}; delete old '${DEPLOY_KEY_TITLE}' keys by hand." >&2
+  fi
 fi
 
 echo
