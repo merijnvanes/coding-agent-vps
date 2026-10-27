@@ -250,6 +250,7 @@ releases avoids the patient-zero window.
 
 | File | Pins |
 |---|---|
+| `sandbox/Dockerfile` (`FROM` line) | `ubuntu:noble-<date>@sha256:<digest>` |
 | `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `GEMINI_CLI_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256`, `SUPABASE_CLI_VERSION` + `SUPABASE_CLI_SHA256` |
 | `cloud-init.yaml` (Tailscale install in `runcmd`) | inline `tailscale=X.Y.Z` |
 | `scripts/cloud-init-tasks.sh` (Docker install block) | `DOCKER_CE_VERSION`, `CONTAINERD_VERSION`, `DOCKER_BUILDX_VERSION`, `DOCKER_COMPOSE_VERSION` |
@@ -270,6 +271,15 @@ and macOS BSD `date`):
 ```bash
 T=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
     || date -u -v-7d +%Y-%m-%dT%H:%M:%SZ)
+```
+
+**Base image** (`ubuntu:noble-<date>`): Docker Hub's dated noble tags,
+newest first, with the push time and the index digest. Pick the newest
+pushed before `$T` and paste `<tag>@<digest>` into `FROM`:
+
+```bash
+curl -fsS "https://hub.docker.com/v2/repositories/library/ubuntu/tags?page_size=10&name=noble-" \
+  | jq -r --arg t "$T" '.results[] | select(.last_updated < $t) | "\(.name)@\(.digest)"' | head -1
 ```
 
 **npm packages** (`npm`, `pnpm`, `wrangler`, `@anthropic-ai/claude-code`,

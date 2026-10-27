@@ -3,7 +3,11 @@
 # Built on the VPS at cloud-init time (`docker build`). No registry pull.
 # Image contains the toolchain pinned in docs/REQUIREMENTS.md §5.
 
-FROM ubuntu:24.04
+# Base image pinned by digest (the multi-arch index), so a re-pushed tag
+# cannot change what we build on. The `apt-get upgrade` at the end of this
+# file still applies Ubuntu's security updates. Refresh per docs/SETUP.md
+# "Refresh pinned versions".
+FROM ubuntu:noble-20260930.1@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
 # === Pinned third-party tool versions ===
 # Each install line below references one of these ARGs. Refresh them at setup
