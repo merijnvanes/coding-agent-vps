@@ -50,9 +50,9 @@ ARG SUPABASE_CLI_SHA256=f6089a86fb9d9221c958193a277338daddd6822f706929943812fa32
 # fetch-apt-key.sh. Recorded 2026-10-27; the keys fetched from the VPS and
 # from the laptop matched. A mismatch fails the build: confirm the new key
 # with the vendor before you change one of these.
-ARG NODESOURCE_KEY_FPR=6F71F525282841EEDAF851B42F59B5F99B1BE0B4
-ARG GCLOUD_KEY_FPR=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
-ARG INFISICAL_KEY_FPR=698CE22DCBD9C67562F3C4749CC397EDC268078E
+ARG NODESOURCE_APT_FPR=6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+ARG GCLOUD_APT_FPR=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+ARG INFISICAL_APT_FPR=698CE22DCBD9C67562F3C4749CC397EDC268078E
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -133,7 +133,7 @@ ENV COREPACK_HOME=/usr/local/corepack
 COPY fetch-apt-key.sh /usr/local/sbin/fetch-apt-key
 RUN chmod 0755 /usr/local/sbin/fetch-apt-key
 RUN fetch-apt-key https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-        /usr/share/keyrings/nodesource.gpg "${NODESOURCE_KEY_FPR}" \
+        /usr/share/keyrings/nodesource.gpg "${NODESOURCE_APT_FPR}" \
     && printf '%s\n' \
         'Types: deb' \
         'URIs: https://deb.nodesource.com/node_22.x' \
@@ -205,7 +205,7 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
 # /usr/bin/{gcloud,gsutil} from the apt package — no /opt symlinks needed.
 # Package renamed `google-cloud-sdk` → `google-cloud-cli` at 371.0.0+.
 RUN fetch-apt-key https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-        /usr/share/keyrings/cloud.google.gpg "${GCLOUD_KEY_FPR}" \
+        /usr/share/keyrings/cloud.google.gpg "${GCLOUD_APT_FPR}" \
     && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
         > /etc/apt/sources.list.d/google-cloud-sdk.list \
     && apt-get update \
@@ -257,7 +257,7 @@ RUN curl -fsSL "https://github.com/supabase/cli/releases/download/v${SUPABASE_CL
 # upstream Cloudsmith setup script does — fetch the GPG key file, check its
 # fingerprint, write sources.list. Subsequent apt installs are GPG-verified.
 RUN fetch-apt-key https://artifacts-cli.infisical.com/infisical.gpg \
-        /usr/share/keyrings/infisical-archive-keyring.gpg "${INFISICAL_KEY_FPR}" \
+        /usr/share/keyrings/infisical-archive-keyring.gpg "${INFISICAL_APT_FPR}" \
     && echo "deb [signed-by=/usr/share/keyrings/infisical-archive-keyring.gpg] https://artifacts-cli.infisical.com/deb stable main" \
         > /etc/apt/sources.list.d/infisical.list \
     && apt-get update \

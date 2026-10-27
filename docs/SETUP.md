@@ -260,7 +260,7 @@ releases avoids the patient-zero window.
 lockstep with the matching `_VERSION` ARG — they verify the downloaded
 tarball at build time, so a mismatch fails the build.
 
-The APT signing key fingerprints (`*_KEY_FPR` in the Dockerfile, the
+The APT signing key fingerprints (`*_APT_FPR` in the Dockerfile, the
 Tailscale one in `cloud-init.yaml`, the Docker one in
 `scripts/cloud-init-tasks.sh`) are not refreshed: a vendor key that changes
 fails the build or the setup. Confirm the new key with the vendor before
