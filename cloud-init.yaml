@@ -129,12 +129,13 @@ runcmd:
   #    binary form (noarmor.gpg), so we save it directly — no dearmor needed.
   #    It is installed only if its one primary key has the fingerprint
   #    recorded on 2026-10-27 (sandbox/fetch-apt-key.sh does the same for the
-  #    other repos; the repo is not cloned yet here). On a mismatch there is
-  #    no keyring, so the Tailscale install below fails and the VPS never
-  #    joins the tailnet.
+  #    other repos; the repo is not cloned yet here). runcmd does not stop
+  #    on a failed line, so a failed download or a mismatch ends the whole
+  #    runcmd script with `exit 1`: nothing later runs, the VPS never joins
+  #    the tailnet, and the Hetzner firewall still denies all inbound.
   - install -d -m 0755 /usr/share/keyrings
-  - curl -fsSL --proto =https https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /root/tailscale.gpg
-  - '[ "$(GNUPGHOME=$(mktemp -d) gpg --batch --show-keys --with-colons /root/tailscale.gpg | awk -F: ''$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }'')" = 2596A99EAAB33821893C0A79458CA832957F5868 ] && install -m 0644 /root/tailscale.gpg /usr/share/keyrings/tailscale-archive-keyring.gpg'
+  - curl -fsSL --proto =https https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /root/tailscale.gpg || exit 1
+  - '[ "$(GNUPGHOME=$(mktemp -d) gpg --batch --show-keys --with-colons /root/tailscale.gpg | awk -F: ''$1 == "pub" { p = 1; next } $1 == "fpr" && p { print $10; p = 0 }'')" = 2596A99EAAB33821893C0A79458CA832957F5868 ] && install -m 0644 /root/tailscale.gpg /usr/share/keyrings/tailscale-archive-keyring.gpg || exit 1'
   - rm -f /root/tailscale.gpg
   - 'echo "deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg] https://pkgs.tailscale.com/stable/ubuntu noble main" > /etc/apt/sources.list.d/tailscale.list'
   - apt-get update

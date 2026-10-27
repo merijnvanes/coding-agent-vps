@@ -301,9 +301,11 @@ curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
 
 After you change a version in `sandbox/tools/package.json`, regenerate
 the lockfile in a running sandbox, where pnpm already has the 7-day
-`minimumReleaseAge`, and copy it back into the repo. From the laptop
-checkout (with no VPS yet, keep the committed lockfile and refresh it
-once the sandbox runs):
+`minimumReleaseAge`, and copy it back into the repo. With no VPS yet,
+leave `sandbox/tools/package.json` and the lockfile exactly as committed:
+the build installs with `--frozen-lockfile`, so a changed version
+without its lockfile fails it. Refresh both once the sandbox runs, from
+the laptop checkout:
 
 ```bash
 vps="ssh <user>@<vps-name>"
