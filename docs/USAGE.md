@@ -800,15 +800,16 @@ Infisical and re-paste the full PEM block.
 
 The sandbox image was built with a pnpm version that blocked
 postinstall scripts (pnpm 10+ default-denies them as supply-chain
-hardening). The Dockerfile in current `main` whitelists the native-
-binary CLIs explicitly with `pnpm add -g --allow-build=...` — so a
-fresh rebuild from the latest source picks up the working install:
+hardening). `sandbox/tools/pnpm-workspace.yaml` in current `main` allows
+the native-binary CLIs' install scripts (`allowBuilds`), so a fresh
+rebuild from the latest source picks up the working install:
 
 ```bash
 ssh <user>@coding-agent-vps
 sudo git -C /opt/agent-vps pull && cd /opt/agent-vps && docker compose up -d --build
 ```
 
-If the error persists after rebuild, check that the Dockerfile in the
-cloned tree includes `--allow-build=@anthropic-ai/claude-code` (and
-similar for codex/wrangler) on the `pnpm add -g` lines.
+If the error persists after rebuild, check that
+`sandbox/tools/pnpm-workspace.yaml` in the cloned tree lists
+`"@anthropic-ai/claude-code": true` (and the same for codex and
+wrangler) under `allowBuilds`.

@@ -1,0 +1,14 @@
+# Install scripts for the sandbox's CLI tools (sandbox/tools/package.json).
+# pnpm 12 fails the install on any dependency with a build script that is
+# not listed here. true runs it: these postinstalls fetch or link native
+# binaries the CLIs need. false skips it, as the earlier `pnpm add -g`
+# installs did; the tools work without these builds.
+allowBuilds:
+  "@anthropic-ai/claude-code": true
+  "@openai/codex": true
+  "@google/gemini-cli": true
+  wrangler: true
+  esbuild: false
+  workerd: false
+  node-pty: false
+  "@github/keytar": false

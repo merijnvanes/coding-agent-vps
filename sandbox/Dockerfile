@@ -30,11 +30,9 @@ ARG PNPM_VERSION=12.7.0
 ARG UV_VERSION=0.13.4
 ARG UV_SHA256=2b428396f12572d4429cf210ca234dd599a33b3af0958a4d5ed569d63e3f344f
 ARG GCLOUD_VERSION=586.0.0-0
-ARG WRANGLER_VERSION=4.141.0
-ARG CLAUDE_CODE_VERSION=2.1.283
-ARG CODEX_VERSION=0.157.1
-ARG GEMINI_CLI_VERSION=0.61.0
-ARG SEO_CLI_VERSION=0.2.41
+# wrangler, Claude Code, Codex, Gemini CLI and seo are pinned in
+# sandbox/tools/package.json, with every dependency below them locked in
+# sandbox/tools/pnpm-lock.yaml.
 ARG INFISICAL_VERSION=0.43.137
 ARG HCLOUD_VERSION=1.69.0
 # SHA256 of hcloud-linux-amd64.tar.gz at HCLOUD_VERSION. Source:
@@ -61,7 +59,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8
 
 # Claude Code auto-updates at runtime by default, which would silently bypass
-# the pinned CLAUDE_CODE_VERSION above. Disable so the pin is load-bearing.
+# the version pinned in sandbox/tools/package.json. Disable so the pin is
+# load-bearing.
 ENV DISABLE_AUTOUPDATER=1
 
 # npm's "global" config is $PREFIX/etc/npmrc by default (where $PREFIX is
@@ -150,9 +149,9 @@ RUN fetch-apt-key https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
     && corepack enable \
     && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
-# pnpm global bin dir on PATH so `pnpm add -g X` produces invokable commands.
-# pnpm 9+ installs global binaries to $PNPM_HOME/bin and errors out at
-# install time if that exact path isn't on PATH (it used to be a warning).
+# pnpm global bin dir on PATH. The locked CLI tools are linked into it
+# (see the tools block below), so the wrappers and docs keep one path per
+# tool. pnpm 9+ also refuses `pnpm add -g` unless this exact path is on PATH.
 ENV PNPM_HOME=/usr/local/pnpm
 ENV PATH="${PNPM_HOME}/bin:${PATH}"
 RUN mkdir -p "${PNPM_HOME}/bin"
@@ -214,21 +213,14 @@ RUN fetch-apt-key https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # --- pnpm config for build-time installs (root) ---
-# The `pnpm add -g` calls below run as root, BEFORE the agent user is created
-# and BEFORE its pnpm config is written. Without this, root's installs of
-# wrangler / claude-code / codex would skip the supply-chain hardening that
-# the agent-user config applies to everything inside /work. Same keys, same
-# values as ~agent/.config/pnpm/config.yaml — see USER agent block for the
-# detailed reasoning behind each setting.
+# The tools install below runs as root, BEFORE the agent user is created
+# and BEFORE its pnpm config is written. The lockfile fixes every version,
+# but a lockfile refresh (docs/SETUP.md) resolves with these settings too.
+# Same keys, same values as ~agent/.config/pnpm/config.yaml — see USER
+# agent block for the detailed reasoning behind each setting.
 RUN mkdir -p /root/.config/pnpm \
     && printf 'minimumReleaseAge: 10080\nblockExoticSubdeps: true\n' \
         > /root/.config/pnpm/config.yaml
-
-# --- wrangler (Cloudflare) — global install via pnpm ---
-# pnpm 10+ blocks postinstall scripts by default (supply-chain hardening).
-# wrangler/claude-code/codex all need their postinstall to run to download
-# native binaries. --allow-build whitelists them explicitly.
-RUN pnpm add -g --allow-build=wrangler "wrangler@${WRANGLER_VERSION}"
 
 # --- hcloud CLI (Hetzner) ---
 # SHA256-verified, parallel to the uv install above. Hetzner publishes
@@ -272,20 +264,25 @@ RUN fetch-apt-key https://artifacts-cli.infisical.com/infisical.gpg \
     && apt-get install -y --no-install-recommends "infisical=${INFISICAL_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
-# --- AI coding CLIs — global install via pnpm ---
-# See --allow-build rationale above (wrangler block).
-RUN pnpm add -g \
-      --allow-build=@anthropic-ai/claude-code \
-      --allow-build=@openai/codex \
-      --allow-build=@google/gemini-cli \
-      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-      "@openai/codex@${CODEX_VERSION}" \
-      "@google/gemini-cli@${GEMINI_CLI_VERSION}"
-
-# `seo` — SEO CLI behind the seo skill (Search Console, DataForSEO). No
-# install scripts, so no --allow-build. Global, because the agent user can't
-# write the global bin dir and the skill expects `seo` on PATH.
-RUN pnpm add -g "seo@${SEO_CLI_VERSION}"
+# --- CLI tools from a lockfile: wrangler, Claude Code, Codex, Gemini CLI, seo ---
+# `pnpm add -g` pinned only these five versions and resolved everything
+# below them on each build. sandbox/tools/pnpm-lock.yaml fixes every
+# dependency with its integrity hash, and --frozen-lockfile fails the build
+# if package.json and the lockfile disagree. pnpm-workspace.yaml says which
+# install scripts run (pnpm blocks the rest). Each bin is linked into
+# $PNPM_HOME/bin, the path the wrappers and docs use; pnpm's bin shims
+# follow the link to the package.
+#
+# `seo` is the CLI behind the seo skill (Search Console, DataForSEO). Its
+# publisher is Ian Nuttall: versions from 0.1.0 (July 2026) come from
+# github.com/iannuttall/seo through npm trusted publishing with provenance.
+# Versions 0.0.x (2014) are an unrelated package that had the name before.
+COPY tools/ /usr/local/pnpm/tools/
+RUN cd /usr/local/pnpm/tools \
+    && pnpm install --frozen-lockfile \
+    && for bin in claude codex gemini seo wrangler; do \
+         ln -s ../tools/node_modules/.bin/"$bin" "${PNPM_HOME}/bin/$bin"; \
+       done
 
 # `claude-yolo` — short alias for `claude --dangerously-skip-permissions`.
 # Mirrors the laptop convenience; running YOLO mode is the intended posture

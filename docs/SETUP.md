@@ -251,7 +251,8 @@ releases avoids the patient-zero window.
 | File | Pins |
 |---|---|
 | `sandbox/Dockerfile` (`FROM` line) | `ubuntu:noble-<date>@sha256:<digest>` |
-| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `WRANGLER_VERSION`, `CLAUDE_CODE_VERSION`, `CODEX_VERSION`, `GEMINI_CLI_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256`, `SUPABASE_CLI_VERSION` + `SUPABASE_CLI_SHA256` |
+| `sandbox/Dockerfile` (ARG block at top) | `NODEJS_VERSION`, `NPM_VERSION`, `PNPM_VERSION`, `UV_VERSION` + `UV_SHA256`, `GCLOUD_VERSION`, `INFISICAL_VERSION`, `HCLOUD_VERSION` + `HCLOUD_SHA256`, `SUPABASE_CLI_VERSION` + `SUPABASE_CLI_SHA256` |
+| `sandbox/tools/package.json` + `pnpm-lock.yaml` | `wrangler`, `@anthropic-ai/claude-code`, `@openai/codex`, `@google/gemini-cli`, `seo`, and everything they depend on |
 | `cloud-init.yaml` (Tailscale install in `runcmd`) | inline `tailscale=X.Y.Z` |
 | `scripts/cloud-init-tasks.sh` (Docker install block) | `DOCKER_CE_VERSION`, `CONTAINERD_VERSION`, `DOCKER_BUILDX_VERSION`, `DOCKER_COMPOSE_VERSION` |
 
@@ -288,8 +289,7 @@ curl -fsS "https://hub.docker.com/v2/repositories/library/ubuntu/tags?page_size=
   | jq -r --arg t "$T" '.results[] | select(.last_updated < $t) | "\(.name)@\(.digest)"' | head -1
 ```
 
-**npm packages** (`npm`, `pnpm`, `wrangler`, `@anthropic-ai/claude-code`,
-`@openai/codex`, `@google/gemini-cli`):
+**npm packages** (`npm`, `pnpm`, and the five in `sandbox/tools/package.json`):
 
 ```bash
 curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
@@ -298,6 +298,26 @@ curl -s "https://registry.npmjs.org/<pkg>" | jq -r --arg t "$T" '
   | map(select((.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) and (.value < $t)))
   | sort_by(.value) | last | .key'
 ```
+
+After you change a version in `sandbox/tools/package.json`, regenerate
+the lockfile in a running sandbox, where pnpm already has the 7-day
+`minimumReleaseAge`, and copy it back into the repo. From the laptop
+checkout (with no VPS yet, keep the committed lockfile and refresh it
+once the sandbox runs):
+
+```bash
+vps="ssh <user>@<vps-name>"
+$vps "docker exec -u agent sandbox bash -c 'rm -rf /tmp/tools && mkdir /tmp/tools'"
+for f in package.json pnpm-workspace.yaml; do
+  $vps "docker exec -i -u agent sandbox sh -c 'cat > /tmp/tools/$f'" < sandbox/tools/$f
+done
+$vps "docker exec -u agent sandbox bash -lc 'cd /tmp/tools && pnpm install --lockfile-only'"
+$vps "docker exec sandbox cat /tmp/tools/pnpm-lock.yaml" > sandbox/tools/pnpm-lock.yaml
+```
+
+A new dependency with an install script fails the build until you list
+it under `allowBuilds` in `sandbox/tools/pnpm-workspace.yaml`: `true` if
+the tool needs it, `false` if it works without.
 
 **GitHub releases** (`uv`, `hcloud`, `supabase`):
 

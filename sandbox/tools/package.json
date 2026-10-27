@@ -1,0 +1,11 @@
+{
+  "name": "agent-tools",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.283",
+    "@openai/codex": "0.157.1",
+    "@google/gemini-cli": "0.61.0",
+    "seo": "0.2.41",
+    "wrangler": "4.141.0"
+  }
+}
