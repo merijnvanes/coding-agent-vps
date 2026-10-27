@@ -21,6 +21,14 @@ coding-agent-vps-deploy
 coding-agent-vps-deploy.pub
 coding-agent-vps-key
 coding-agent-vps-key.pub
+# GCP service-account keys (the value of GCP_SA_KEY_JSON). The console's
+# default download name (<project>-<hash>.json) cannot be matched; save
+# keys outside the repo.
+*service-account*.json
+*-sa-key.json
+*credentials*.json
+# Infisical CLI login state (a project's .infisical.json is not a secret)
+.infisical/
 
 # Generated user-data (Tailscale auth-key + deploy private key substituted
 # into a temp copy of cloud-init.yaml by provision.sh)
